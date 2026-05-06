@@ -1,3 +1,6 @@
 # Local Netlify folder
 .netlify
 /functions/weather-bot
+
+# Local test logs
+/logs/
