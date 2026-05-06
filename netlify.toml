@@ -7,4 +7,4 @@
 # If it's exactly 07:00 or 19:00 NZST (19:00 or 07:00 UTC), the Go code will 
 # automatically trigger the weather broadcast routine.
 [functions."weather-bot"]
-  schedule = "*/5 * * * *"
+  schedule = "* * * * *" # every 1min
