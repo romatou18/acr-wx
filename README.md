@@ -45,14 +45,14 @@ Because satellite data is expensive and limited to 160 characters per message, t
 
 ### Example 2: Spring Climbing Window (Arthur's Pass)
 **The Output:**
-> `YR T:-2C D1:0mm D2:5mm | MS(ART) D1 Clear W1k:10 2k:15 3k:25 | D2 PrtlyCldy w/ IsoShwrs W1k:20 2k:35 3k:50 | AVL:2-MODE`
+> `YR T:-2C D1:0mm D2:5mm | MS(ART) D1 Clear W1k:10 2k:15 3k:25 | D2 PrtlyCldy w/ IsoShwrs W1k:20 2k:35 3k:50 | AVL:2-MODR`
 
 **The Breakdown:**
 * **`YR` (yr.no data at 2,000m):** Temp is -2°C. No precip today, 5mm tomorrow.
 * **`MS(ART)` (MetService Arthur's Pass):**
   * **Day 1:** Clear skies. Highly manageable winds peaking at 25km/h at 3000m.
   * **Day 2:** Partly cloudy with isolated showers. Winds increasing to 50km/h at the summits.
-* **`AVL:2-MODE`:** The NZ Avalanche Advisory rates the region as Level 2 (Moderate Danger).
+* **`AVL:2-MODR`:** The NZ Avalanche Advisory rates the region as Level 2 (Moderate Danger).
 
 ---
 

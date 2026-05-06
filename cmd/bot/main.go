@@ -93,7 +93,7 @@ func metServiceShortCode(parkKey string) string {
 // NZAA / MetService use 1–5 avalanche danger; we keep a 4-letter satellite suffix (README examples).
 var avlDangerSuffix = map[int]string{
 	1: "LOW",
-	2: "MODE",
+	2: "MODR",
 	3: "CONS",
 	4: "HIGH",
 	5: "EXTR",
@@ -438,7 +438,7 @@ func fetchAvalanche(parkSlug string) string {
 	}
 
 	if hasInsufficient {
-		return "AVL:CLSD"
+		return "AVL:-"
 	}
 	if dr == 0 {
 		return "AVL:0-NRAT"
