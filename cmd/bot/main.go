@@ -173,10 +173,10 @@ var httpClient = &http.Client{Timeout: 5 * time.Second}
 
 func fetchYrNo(lat, lon float64, alt int) string {
 	targetURL := fmt.Sprintf("https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=%f&lon=%f&altitude=%d", lat, lon, alt)
-	
+
 	req, _ := http.NewRequest("GET", targetURL, nil)
 	req.Header.Set("User-Agent", UserAgent)
-	
+
 	resp, err := httpClient.Do(req)
 	if err != nil || resp.StatusCode != 200 {
 		return "YR:Err"
@@ -212,7 +212,7 @@ func fetchYrNo(lat, lon float64, alt int) string {
 	}
 
 	temp := int(math.Round(ts[0].Data.Instant.Details.AirTemp))
-	
+
 	var d1Precip, d2Precip float64
 	d1Limit := min(24, len(ts))
 	d2Limit := min(48, len(ts))
@@ -371,7 +371,7 @@ func fetchMetService(park string) string {
 
 	shortPark := metServiceShortCode(park)
 
-	return fmt.Sprintf("MS(%s) D1 %s W1k:%s 2k:%s 3k:%s | D2 %s W1k:%s 2k:%s 3k:%s", 
+	return fmt.Sprintf("MS(%s) D1 %s W1k:%s 2k:%s 3k:%s | D2 %s W1k:%s 2k:%s 3k:%s",
 		shortPark, d1Txt, d1W1, d1W2, d1W3, d2Txt, d2W1, d2W2, d2W3)
 }
 
@@ -449,7 +449,7 @@ func fetchAvalanche(parkSlug string) string {
 func sendToGarmin(msg, extId, guid string) {
 	if len(msg) > 160 { msg = msg[:160] }
 	endpoint := "https://explore.garmin.com/TextMessage/TxtMsg"
-	
+
 	data := url.Values{}
 	data.Set("Message", msg)
 	data.Set("extId", extId)
@@ -501,11 +501,15 @@ func getElevation(lat, lon float64) int {
 
 func compressMetServiceText(text string) string {
 	replacements := map[string]string{
-		"Partly cloudy": "PrtlyCldy", "Mostly cloudy": "MstlyCldy",
-		"isolated showers": "IsoShwrs", "scattered showers": "SctShwrs",
-		"heavy rain": "HvyRain", "falling as snow": "Snow", "showers": "Shwrs",
+		"Partly cloudy": "PrtlyCldy", "Mostly cloudy": "MstlyCldy", "possible": "possib", "occasional": "occas.",
+		"isolated showers": "IsoShwrs", "scattered showers": "SctShwrs", "scattered rain": "SctRain",
+		"heavy rain": "HvyRain", "falling as snow": "Snow", "showers": "Shwrs", "isolated":"iso", "metre":"mtr",
 		"developing": "dev", "morning": "AM", "afternoon": "PM", "evening": "Eve",
-		"Fine": "Clear", "turning to": "->", "easing": "eas", "with": "w/",
+		"Snow possible above": "SnowPossibAbov",
+		"heavy falls": "heavyFalls", "heavy falls this Evening":"heavyFallsEvening",
+		"a few showers mainly from low altitude": "fewShowersMainlyInLowAlt",
+		"Rain with heavy falls": "Rain/heavyFalls", "and possible thunderstorm": "+possibThunderStorm",
+		"Fine": "Clear", "turning to": "then", "easing": "easing", "with": "w/", "and":"+",
 	}
 
 	title := cases.Title(language.English)
@@ -644,19 +648,19 @@ func handler(ctx context.Context) error {
 				criteria := imap.NewSearchCriteria()
 				criteria.WithoutFlags = []string{imap.SeenFlag}
 				uids, err := c.Search(criteria)
-				
+
 				if err == nil && len(uids) > 0 {
 					seqset := new(imap.SeqSet)
 					seqset.AddNum(uids...)
-					
+
 					section := &imap.BodySectionName{}
 					items := []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}
-					
+
 					messages := make(chan *imap.Message, 10)
 					go func() {
 						c.Fetch(seqset, items, messages)
 					}()
-					
+
 					for msg := range messages {
 						subject := msg.Envelope.Subject
 						var senderEmail string
@@ -672,7 +676,7 @@ func handler(ctx context.Context) error {
 							fmt.Println("🧪 Test command detected! Fetching immediate weather...")
 							testLat, _ := strconv.ParseFloat(match[1], 64)
 							testLon, _ := strconv.ParseFloat(match[2], 64)
-							
+
 							testPark := getClosestPark(testLat, testLon)
 							testAlt := getElevation(testLat, testLon)
 
@@ -691,13 +695,13 @@ func handler(ctx context.Context) error {
 							item := imap.FormatFlagsOp(imap.AddFlags, true)
 							flags := []interface{}{imap.SeenFlag}
 							c.Store(seqset, item, flags, nil)
-							continue 
+							continue
 						}
 
 						// 2. GARMIN COMMAND PARSER
 						r := msg.GetBody(section)
 						if r == nil { continue }
-						
+
 						bodyBytes, _ := io.ReadAll(r)
 						bodyStr := string(bodyBytes)
 
