@@ -454,23 +454,52 @@ func min(a, b int) int {
 	return b
 }
 
-func sendTestEmailReply(toEmail, report string) {
+func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) error {
 	from := os.Getenv("EMAIL_USER")
 	pass := os.Getenv("EMAIL_PASS")
 	host := "smtp.gmail.com"
 	port := "587"
 
-	msg := []byte("To: " + toEmail + "\r\n" +
-		"Subject: Alpine Weather Test Report\r\n\r\n" +
-		"Alpine Weather Report (short condensed for Garmin inreach/messenger):\r\n\n" + report + "\r\n")
+	if from == "" || pass == "" {
+		err := fmt.Errorf("EMAIL_USER or EMAIL_PASS not set")
+		log.Printf("❌ Cannot send test email: %v\n", err)
+		return err
+	}
+
+	subject := strings.TrimSpace(origSubject)
+	if subject == "" {
+		subject = "Alpine Weather Test Report"
+	} else if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+		subject = "Re: " + subject
+	}
+
+	msgID := fmt.Sprintf("<%d.%d@%s>", time.Now().UnixNano(), os.Getpid(), host)
+
+	headers := []string{
+		"From: " + from,
+		"To: " + toEmail,
+		"Subject: " + subject,
+		"Date: " + time.Now().UTC().Format(time.RFC1123Z),
+		"Message-ID: " + msgID,
+		"MIME-Version: 1.0",
+		"Content-Type: text/plain; charset=UTF-8",
+	}
+	if inReplyToMsgID != "" {
+		headers = append(headers, "In-Reply-To: "+inReplyToMsgID)
+		headers = append(headers, "References: "+inReplyToMsgID)
+	}
+
+	body := "Alpine Weather Report (short condensed for Garmin inreach/messenger):\r\n\r\n" + report + "\r\n"
+	msg := []byte(strings.Join(headers, "\r\n") + "\r\n\r\n" + body)
 
 	auth := smtp.PlainAuth("", from, pass, host)
 	err := smtp.SendMail(host+":"+port, auth, from, []string{toEmail}, msg)
 	if err != nil {
 		log.Printf("❌ Failed to send test email to %s: %v\n", toEmail, err)
-	} else {
-		log.Printf("✅ Test email successfully sent to %s\n", toEmail)
+		return err
 	}
+	log.Printf("✅ Test email successfully sent to %s\n", toEmail)
+	return nil
 }
 
 // ==========================================
@@ -582,53 +611,87 @@ func handler(ctx context.Context) error {
 	if mbox.Messages > 0 {
 		criteria := imap.NewSearchCriteria()
 		criteria.WithoutFlags = []string{imap.SeenFlag}
-		uids, err := c.Search(criteria)
+		seqNums, err := c.Search(criteria)
 
 		if err != nil {
 			log.Printf("IMAP Search criteria error: %v", err)
-		} else if len(uids) > 0 {
-			log.Printf("IMAP: Found %d UNSEEN messages.", len(uids))
+		} else if len(seqNums) > 0 {
+			log.Printf("IMAP: Found %d UNSEEN messages.", len(seqNums))
 			seqset := new(imap.SeqSet)
-			seqset.AddNum(uids...)
+			seqset.AddNum(seqNums...)
 
 			section := &imap.BodySectionName{}
 			items := []imap.FetchItem{imap.FetchEnvelope, section.FetchItem()}
 
-			messages := make(chan *imap.Message, 10)
+			// Drain Fetch fully before issuing any other IMAP command. Fetch holds
+			// the connection's command lock; calling Store while still iterating
+			// the channel deadlocks once the buffer fills.
+			messages := make(chan *imap.Message, len(seqNums))
+			fetchDone := make(chan error, 1)
 			go func() {
-				if err := c.Fetch(seqset, items, messages); err != nil {
-					log.Printf("IMAP Fetch error: %v", err)
-				}
+				fetchDone <- c.Fetch(seqset, items, messages)
 			}()
 
+			var collected []*imap.Message
 			for msg := range messages {
+				collected = append(collected, msg)
+			}
+			if ferr := <-fetchDone; ferr != nil {
+				log.Printf("IMAP Fetch error: %v", ferr)
+			}
+
+			markSeen := func(seqNum uint32) {
+				singleSet := new(imap.SeqSet)
+				singleSet.AddNum(seqNum)
+				item := imap.FormatFlagsOp(imap.AddFlags, true)
+				flags := []interface{}{imap.SeenFlag}
+				if err := c.Store(singleSet, item, flags, nil); err != nil {
+					log.Printf("Failed to mark message %d seen: %v", seqNum, err)
+				}
+			}
+
+			for _, msg := range collected {
 				subject := msg.Envelope.Subject
 				var senderEmail string
 				if len(msg.Envelope.From) > 0 {
 					senderEmail = msg.Envelope.From[0].MailboxName + "@" + msg.Envelope.From[0].HostName
 				}
+				replyTo := senderEmail
+				if len(msg.Envelope.ReplyTo) > 0 {
+					replyTo = msg.Envelope.ReplyTo[0].MailboxName + "@" + msg.Envelope.ReplyTo[0].HostName
+				}
 				log.Printf("Processing email from: %s, Subject: %s", senderEmail, subject)
 
-				// 1. TEST COMMAND PARSER
+				// Read body once — both test and Garmin parsers need it.
+				var bodyStr string
+				if r := msg.GetBody(section); r != nil {
+					b, _ := io.ReadAll(r)
+					bodyStr = string(b)
+				}
+				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
+
+				// 1. TEST COMMAND PARSER (subject OR body)
 				testCoordRegex := regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
-				bareUpdateRegex := regexp.MustCompile(`(?i)^update\s*$`)
+				bareUpdateRegex := regexp.MustCompile(`(?im)^\s*update\s*$`)
+
+				combined := subject + "\n" + bodyStr
 
 				var testLat, testLon float64
 				isTest := false
 
-				// Match explicit coords in subject, OR fallback to current state if it's just a bare "update"
-				if match := testCoordRegex.FindStringSubmatch(subject); len(match) == 3 {
+				if match := testCoordRegex.FindStringSubmatch(combined); len(match) == 3 {
 					testLat, _ = strconv.ParseFloat(match[1], 64)
 					testLon, _ = strconv.ParseFloat(match[2], 64)
 					isTest = true
-				} else if bareUpdateRegex.MatchString(strings.TrimSpace(subject)) {
+				} else if bareUpdateRegex.MatchString(combined) {
 					testLat = state.Lat
 					testLon = state.Lon
 					isTest = true
 				}
 
 				if isTest {
-					log.Println("🧪 Test command detected in Subject! Fetching immediate weather...")
+					log.Println("🧪 Test command detected! Fetching immediate weather...")
+					sendOK := true
 					if testLat == 0 && testLon == 0 {
 						log.Println("Cannot process test update: No coordinates available.")
 					} else {
@@ -645,25 +708,28 @@ func handler(ctx context.Context) error {
 
 						finalMsg := fmt.Sprintf("%s | %s | %s", yrData, msData, avlData)
 						log.Printf("📋 Test weather report (%d chars): %s\n", len(finalMsg), finalMsg)
-						sendTestEmailReply(senderEmail, finalMsg)
+						if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
+							sendOK = false
+						}
 					}
 
-					item := imap.FormatFlagsOp(imap.AddFlags, true)
-					flags := []interface{}{imap.SeenFlag}
-					c.Store(seqset, item, flags, nil)
+					// Only mark seen if there was nothing to send OR the send succeeded.
+					// A transient SMTP failure leaves the message unread so the next
+					// scheduled invocation can retry.
+					if sendOK {
+						markSeen(msg.SeqNum)
+					} else {
+						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
+					}
 					continue
 				}
 
 				// 2. GARMIN COMMAND PARSER
-				r := msg.GetBody(section)
-				if r == nil {
-					log.Println("Garmin parser: Body section is nil, skipping.")
+				if bodyStr == "" {
+					log.Println("Garmin parser: Body section is empty, skipping.")
+					markSeen(msg.SeqNum)
 					continue
 				}
-
-				bodyBytes, _ := io.ReadAll(r)
-				bodyStr := string(bodyBytes)
-				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
 
 				garminDirty := false
 
@@ -746,9 +812,7 @@ func handler(ctx context.Context) error {
 					}
 				}
 
-				item := imap.FormatFlagsOp(imap.AddFlags, true)
-				flags := []interface{}{imap.SeenFlag}
-				c.Store(seqset, item, flags, nil)
+				markSeen(msg.SeqNum)
 			}
 		} else {
 			log.Println("IMAP: No UNSEEN messages found.")
