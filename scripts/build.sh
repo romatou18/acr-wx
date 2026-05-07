@@ -14,9 +14,6 @@ mkdir -p functions/
 # CGO_ENABLED=0 ensures a static binary with no external C dependencies
 echo "⚙️  Compiling for linux/amd64..."
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o functions/weather-bot ./cmd/bot
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o functions/weather-api  ./cmd/weather-api
 
-echo "✅ Build complete! Binary generated at: functions/weather-bot"
-
-# Optional: Run Netlify Dev to test it locally
-# Uncomment the line below if you want the script to instantly launch a local test server
-# netlify dev
+echo "✅ Build complete! Binaries: functions/weather-bot, functions/weather-api"

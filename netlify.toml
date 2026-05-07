@@ -1,10 +1,10 @@
 [build]
-  # Netlify compiles the Go code into a binary inside the /functions folder
-  command = "go build -o functions/weather-bot ./cmd/bot"
+  command = "bash scripts/build.sh"
   functions = "functions"
 
-# We schedule the bot to wake up every 5 minutes to check for new Garmin emails.
-# If it's exactly 07:00 or 19:00 NZST (19:00 or 07:00 UTC), the Go code will 
-# automatically trigger the weather broadcast routine.
 [functions."weather-bot"]
-  schedule = "* * * * *" # every 1min
+  schedule = "* * * * *"
+
+[functions."weather-api"]
+  # HTTP GET /weather-api?lat=<lat>&lon=<lon>
+  # Returns the same compressed report sent to the Garmin device.
