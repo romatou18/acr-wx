@@ -23,8 +23,8 @@ import (
 func handler(_ context.Context, req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	path := strings.TrimRight(req.Path, "/")
 
-	// GET /log  — usage log
-	if path == "/weather-api/log" {
+	// GET /log or /weather-api/log  — usage log
+	if path == "/weather-api/log" || path == "/log" {
 		return handleLogs(req)
 	}
 
