@@ -192,7 +192,32 @@ func ensureSchema(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("seed row: %w", err)
 	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS request_log (
+			id      INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts      INTEGER NOT NULL,
+			source  TEXT    NOT NULL,
+			client  TEXT    NOT NULL,
+			command TEXT    NOT NULL,
+			lat     REAL    NOT NULL DEFAULT 0,
+			lon     REAL    NOT NULL DEFAULT 0,
+			park    TEXT    NOT NULL DEFAULT ''
+		)`)
+	if err != nil {
+		return fmt.Errorf("create request_log: %w", err)
+	}
 	return nil
+}
+
+func logRequest(db *sql.DB, source, client, command string, lat, lon float64, park string) {
+	_, err := db.Exec(
+		`INSERT INTO request_log (ts, source, client, command, lat, lon, park) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		time.Now().Unix(), source, client, command, lat, lon, park,
+	)
+	if err != nil {
+		log.Printf("logRequest: %v", err)
+	}
 }
 
 func loadState(db *sql.DB) (SessionState, error) {
@@ -377,6 +402,7 @@ func handler(ctx context.Context) error {
 				// "all" — return forecasts for every registered park
 				if allRegex.MatchString(combined) {
 					log.Println("🗺️ ALL parks command detected! Fetching forecasts for all parks...")
+					logRequest(db, "email", replyTo, "ALL", 0, 0, "all")
 					finalMsg := forecast.BuildAllReports()
 					log.Printf("📋 All-parks report (%d chars):\n%s\n", len(finalMsg), finalMsg)
 					sendOK := true
@@ -412,6 +438,7 @@ func handler(ctx context.Context) error {
 					} else {
 						testPark := forecast.GetClosestPark(testLat, testLon)
 						testAlt := forecast.GetElevation(testLat, testLon)
+						logRequest(db, "email", replyTo, "UPDATE", testLat, testLon, testPark)
 						finalMsg := forecast.BuildReport(testLat, testLon, testAlt, testPark)
 						log.Printf("📋 Test weather report (%d chars): %s\n", len(finalMsg), finalMsg)
 						if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
@@ -452,11 +479,13 @@ func handler(ctx context.Context) error {
 					state.Active = true
 					garminDirty = true
 					log.Println("Action: START tracking.")
+					logRequest(db, "garmin", state.ExtID, "START", state.Lat, state.Lon, state.Park)
 				} else if strings.Contains(upperBody, "STOP") {
 					state.Active = false
 					sendToGarmin("Server: Updates Paused.", state.ExtID, state.GUID)
 					garminDirty = true
 					log.Println("Action: STOP tracking.")
+					logRequest(db, "garmin", state.ExtID, "STOP", state.Lat, state.Lon, state.Park)
 				}
 
 				isUpdateCmd := strings.Contains(upperBody, "UPDATE")
@@ -493,6 +522,11 @@ func handler(ctx context.Context) error {
 					if state.Lat == 0 && state.Lon == 0 {
 						log.Println("Cannot fetch weather: no coordinates available.")
 					} else {
+						cmd := "AUTO"
+						if isUpdateCmd {
+							cmd = "UPDATE"
+						}
+						logRequest(db, "garmin", state.ExtID, cmd, state.Lat, state.Lon, state.Park)
 						finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
 						sendToGarmin(finalMsg, state.ExtID, state.GUID)
 
@@ -527,6 +561,7 @@ func handler(ctx context.Context) error {
 			log.Println("🌅 Broadcast window active! Fetching routine weather...")
 			slot := routineBroadcastSlot(now)
 
+			logRequest(db, "garmin", state.ExtID, "ROUTINE", state.Lat, state.Lon, state.Park)
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
 			sendToGarmin(finalMsg, state.ExtID, state.GUID)
 
