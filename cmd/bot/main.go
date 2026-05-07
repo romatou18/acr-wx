@@ -534,12 +534,22 @@ func saveState(db *sql.DB, s SessionState) error {
 		activeInt = 1
 	}
 	_, err := db.Exec(
-		`UPDATE session_state SET ext_id=?, guid=?, active=?, lat=?, lon=?, alt=?, park=?, last_fetch=?, last_routine_nz=? WHERE id='garmin_primary'`,
+		`INSERT INTO session_state (id, ext_id, guid, active, lat, lon, alt, park, last_fetch, last_routine_nz)
+		 VALUES ('garmin_primary', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   ext_id=excluded.ext_id, guid=excluded.guid, active=excluded.active,
+		   lat=excluded.lat, lon=excluded.lon, alt=excluded.alt, park=excluded.park,
+		   last_fetch=excluded.last_fetch, last_routine_nz=excluded.last_routine_nz`,
 		s.ExtID, s.GUID, activeInt, s.Lat, s.Lon, s.Alt, s.Park, s.LastFetch, s.LastRoutineNZ,
 	)
 	if err != nil && strings.Contains(err.Error(), "last_routine") {
 		_, err = db.Exec(
-			`UPDATE session_state SET ext_id=?, guid=?, active=?, lat=?, lon=?, alt=?, park=?, last_fetch=? WHERE id='garmin_primary'`,
+			`INSERT INTO session_state (id, ext_id, guid, active, lat, lon, alt, park, last_fetch)
+			 VALUES ('garmin_primary', ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT(id) DO UPDATE SET
+			   ext_id=excluded.ext_id, guid=excluded.guid, active=excluded.active,
+			   lat=excluded.lat, lon=excluded.lon, alt=excluded.alt, park=excluded.park,
+			   last_fetch=excluded.last_fetch`,
 			s.ExtID, s.GUID, activeInt, s.Lat, s.Lon, s.Alt, s.Park, s.LastFetch,
 		)
 	}
@@ -713,11 +723,11 @@ func handler(ctx context.Context) error {
 						}
 					}
 
-					// Only mark seen if there was nothing to send OR the send succeeded.
-					// A transient SMTP failure leaves the message unread so the next
+					msgSet := new(imap.SeqSet)
+					msgSet.AddNum(msg.SeqNum)
 					// scheduled invocation can retry.
 					if sendOK {
-						markSeen(msg.SeqNum)
+					c.Store(msgSet, item, flags, nil)
 					} else {
 						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
 					}
@@ -812,7 +822,9 @@ func handler(ctx context.Context) error {
 					}
 				}
 
-				markSeen(msg.SeqNum)
+				msgSet := new(imap.SeqSet)
+				msgSet.AddNum(msg.SeqNum)
+				c.Store(msgSet, item, flags, nil)
 			}
 		} else {
 			log.Println("IMAP: No UNSEEN messages found.")
