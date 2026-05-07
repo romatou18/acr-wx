@@ -6,5 +6,16 @@
   schedule = "* * * * *"
 
 [functions."weather-api"]
-  # HTTP GET /weather-api?lat=<lat>&lon=<lon>
-  # Returns the same compressed report sent to the Garmin device.
+  # Invoked via the redirects below — users hit /weather-api, not /.netlify/functions/weather-api
+
+# Proxy /weather-api/* and /weather-api to the Lambda function.
+# status=200 means Netlify rewrites internally (no client redirect).
+[[redirects]]
+  from = "/weather-api/all"
+  to   = "/.netlify/functions/weather-api/all"
+  status = 200
+
+[[redirects]]
+  from = "/weather-api"
+  to   = "/.netlify/functions/weather-api"
+  status = 200
