@@ -5,16 +5,17 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"acr-wx/internal/forecast"
 )
 
-// Exercise MetService + NZAA for every geofence key in PARKS (network required).
+// Exercise MetService + NZAA for every geofence key in Parks (network required).
 func TestAllParksMetServiceAndNZAA(t *testing.T) {
-	for key := range PARKS {
+	for key := range forecast.Parks {
 		key := key
 		t.Run(key, func(t *testing.T) {
-			ms := fetchMetService(key)
+			ms := forecast.FetchMetService(key)
 			if strings.HasPrefix(ms, "MS:") && ms != "MS:Err" {
-				// structured error from parser
 				t.Fatalf("MetService: %s", ms)
 			}
 			if strings.Contains(ms, "W1k:??") || strings.Contains(ms, "W2k:??") {
@@ -24,7 +25,7 @@ func TestAllParksMetServiceAndNZAA(t *testing.T) {
 				t.Fatalf("MetService missing 3000m wind (expected estimate or API value): %s", ms)
 			}
 
-			av := fetchAvalanche(key)
+			av := forecast.FetchAvalanche(key)
 			switch {
 			case strings.HasPrefix(av, "AVL:Err"), strings.HasPrefix(av, "AVL:JSON"):
 				t.Fatalf("NZAA: %s", av)

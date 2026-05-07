@@ -43,9 +43,47 @@ type SessionState struct {
 var garminHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 func sendToGarmin(msg, extId, guid string) {
-	if len(msg) > 160 {
-		msg = msg[:160]
+	// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
+	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
+	if os.Getenv("GARMIN_DRY_RUN") == "1" {
+		replyTo := os.Getenv("GARMIN_DRY_RUN_REPLY_TO")
+		if replyTo == "" {
+			replyTo = os.Getenv("EMAIL_USER")
+		}
+		log.Printf("🔧 GARMIN_DRY_RUN: routing report to %s (extId=%s)\n", replyTo, extId)
+		if err := sendTestEmailReply(replyTo, msg, "", "Garmin Dry Run: Weather Report"); err != nil {
+			log.Printf("❌ GARMIN_DRY_RUN email failed: %v\n", err)
+		}
+		return
 	}
+
+	for i, part := range splitForGarmin(msg) {
+		postToGarmin(i+1, part, extId, guid)
+	}
+}
+
+// splitForGarmin splits a report into ≤160-char chunks for the Garmin inReach
+// 160-char SMS limit. The natural boundary is " | D2 " which separates the
+// Day 1 and Day 2 forecast sections.
+func splitForGarmin(msg string) []string {
+	if len(msg) <= 160 {
+		return []string{msg}
+	}
+	if i := strings.Index(msg, " | D2 "); i != -1 {
+		return []string{msg[:i], msg[i+3:]}
+	}
+	// Fallback: find the last space before byte 160 and split there.
+	cut := 160
+	for cut > 0 && msg[cut] != ' ' {
+		cut--
+	}
+	if cut == 0 {
+		cut = 160
+	}
+	return []string{msg[:cut], strings.TrimSpace(msg[cut:])}
+}
+
+func postToGarmin(partNum int, msg, extId, guid string) {
 	data := url.Values{}
 	data.Set("Message", msg)
 	data.Set("extId", extId)
@@ -53,15 +91,15 @@ func sendToGarmin(msg, extId, guid string) {
 
 	resp, err := garminHTTPClient.PostForm("https://explore.garmin.com/TextMessage/TxtMsg", data)
 	if err != nil {
-		log.Printf("❌ Failed to send to Garmin: %v\n", err)
+		log.Printf("❌ Failed to send to Garmin (part %d): %v\n", partNum, err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == 200 {
-		log.Printf("✅ Successfully sent to Garmin (%d chars): %s\n", len(msg), msg)
+		log.Printf("✅ Sent to Garmin part %d/%d (%d chars): %s\n", partNum, partNum, len(msg), msg)
 	} else {
-		log.Printf("❌ Failed to send to Garmin. Status: %d\n", resp.StatusCode)
+		log.Printf("❌ Failed to send to Garmin part %d. Status: %d\n", partNum, resp.StatusCode)
 	}
 }
 
