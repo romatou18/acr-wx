@@ -26,12 +26,26 @@ type ParkInfo struct {
 }
 
 var Parks = map[string]ParkInfo{
-	"arthurs-pass":         {Lat: -42.94, Lon: 171.56, NzaaID: 4, MSSlug: "arthurs-pass"},
-	"craigieburn":          {Lat: -43.13, Lon: 171.71, NzaaID: 5, MSSlug: "canterbury-high-country"},
-	"aoraki-mt-cook":       {Lat: -43.73, Lon: 170.09, NzaaID: 7, MSSlug: "aoraki-mt-cook"},
-	"westland-tai-poutini": {Lat: -43.41, Lon: 170.18, NzaaID: 7, MSSlug: "aoraki-mt-cook"},
+	// Canterbury / Southern Alps
+	"arthurs-pass":         {Lat: -42.94, Lon: 171.56, NzaaID: 4,  MSSlug: "arthurs-pass"},
+	"craigieburn":          {Lat: -43.13, Lon: 171.71, NzaaID: 5,  MSSlug: "canterbury-high-country"},
+	"mt-hutt":              {Lat: -43.49, Lon: 171.49, NzaaID: 6,  MSSlug: "arthurs-pass"},
+	"aoraki-mt-cook":       {Lat: -43.73, Lon: 170.09, NzaaID: 7,  MSSlug: "aoraki-mt-cook"},
+	"westland-tai-poutini": {Lat: -43.41, Lon: 170.18, NzaaID: 7,  MSSlug: "aoraki-mt-cook"},
+	"two-thumbs":           {Lat: -43.87, Lon: 170.80, NzaaID: 9,  MSSlug: "aoraki-mt-cook"},
+	"ohau":                 {Lat: -44.23, Lon: 169.87, NzaaID: 8,  MSSlug: "aoraki-mt-cook"},
+	// Otago / Southland
 	"mt-aspiring":          {Lat: -44.39, Lon: 168.72, NzaaID: 15, MSSlug: "mt-aspiring"},
+	"wanaka":               {Lat: -44.70, Lon: 169.15, NzaaID: 11, MSSlug: "mt-aspiring"},
+	"queenstown":           {Lat: -45.03, Lon: 168.66, NzaaID: 10, MSSlug: "mt-aspiring"},
+	"fiordland":            {Lat: -45.41, Lon: 167.72, NzaaID: 12, MSSlug: "fiordland"},
+	// Nelson / Marlborough / West Coast
 	"nelson-lakes":         {Lat: -41.90, Lon: 172.68, NzaaID: 13, MSSlug: "nelson-lakes"},
+	"kahurangi":            {Lat: -41.10, Lon: 172.40, NzaaID: 0,  MSSlug: "kahurangi"},
+	"paparoa":              {Lat: -42.10, Lon: 171.37, NzaaID: 0,  MSSlug: "paparoa"},
+	// North Island
+	"tongariro":            {Lat: -39.30, Lon: 175.57, NzaaID: 1,  MSSlug: "tongariro"},
+	"egmont":               {Lat: -39.30, Lon: 174.06, NzaaID: 2,  MSSlug: "egmont"},
 }
 
 var avlDangerSuffix = map[int]string{
@@ -290,8 +304,8 @@ func FetchMetService(park string) string {
 
 func FetchAvalanche(parkSlug string) string {
 	parkInfo, ok := Parks[parkSlug]
-	if !ok {
-		return "AVL:??"
+	if !ok || parkInfo.NzaaID == 0 {
+		return "AVL:-"
 	}
 
 	u := fmt.Sprintf("https://www.avalanche.net.nz/api/forecastsearch?region=%d", parkInfo.NzaaID)
