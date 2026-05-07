@@ -1,6 +1,6 @@
-# 🏔️ Alpine Weather Bridge
+# 🏔️ Garmin Inreach NZ Alpine Weather Bridge
 
-A highly optimized, serverless Go application that acts as a bridge between Garmin inReach satellite communicators and New Zealand's top alpine weather and avalanche APIs. 
+A optimised serverless Go application that acts as a bridge between Garmin inReach satellite communicators and New Zealand's top alpine weather and avalanche APIs. 
 
 Designed specifically for mountaineering in the Southern Alps, this bot intercepts location pings from your Garmin device, fetches hyper-local topographical weather data, compresses it into a highly efficient string (<160 characters), and fires it back to your device over the Iridium satellite network.
 
