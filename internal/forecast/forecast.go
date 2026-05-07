@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -54,6 +55,40 @@ func BuildReport(lat, lon float64, alt int, park string) string {
 	go func() { defer wg.Done(); avl = FetchAvalanche(park) }()
 	wg.Wait()
 	return fmt.Sprintf("%s | %s | %s", yr, ms, avl)
+}
+
+// BuildAllReports fetches the forecast for every registered park concurrently
+// and returns one report per line, sorted alphabetically by park slug.
+func BuildAllReports() string {
+	type result struct {
+		slug   string
+		report string
+	}
+
+	results := make([]result, 0, len(Parks))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for slug, info := range Parks {
+		wg.Add(1)
+		go func(slug string, info ParkInfo) {
+			defer wg.Done()
+			alt := GetElevation(info.Lat, info.Lon)
+			report := BuildReport(info.Lat, info.Lon, alt, slug)
+			mu.Lock()
+			results = append(results, result{slug, report})
+			mu.Unlock()
+		}(slug, info)
+	}
+	wg.Wait()
+
+	sort.Slice(results, func(i, j int) bool { return results[i].slug < results[j].slug })
+
+	var sb strings.Builder
+	for _, r := range results {
+		sb.WriteString(r.slug + ": " + r.report + "\n")
+	}
+	return strings.TrimSpace(sb.String())
 }
 
 func FetchYrNo(lat, lon float64, alt int) string {

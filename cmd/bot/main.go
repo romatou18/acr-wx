@@ -332,8 +332,26 @@ func handler(ctx context.Context) error {
 				// 1. TEST COMMAND PARSER (subject OR body)
 				testCoordRegex := regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
 				bareUpdateRegex := regexp.MustCompile(`(?im)^\s*update\s*$`)
+				allRegex := regexp.MustCompile(`(?im)^\s*all\s*$`)
 
 				combined := subject + "\n" + bodyStr
+
+				// "all" — return forecasts for every registered park
+				if allRegex.MatchString(combined) {
+					log.Println("🗺️ ALL parks command detected! Fetching forecasts for all parks...")
+					finalMsg := forecast.BuildAllReports()
+					log.Printf("📋 All-parks report (%d chars):\n%s\n", len(finalMsg), finalMsg)
+					sendOK := true
+					if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
+						sendOK = false
+					}
+					if sendOK {
+						markSeen(msg.SeqNum)
+					} else {
+						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
+					}
+					continue
+				}
 
 				var testLat, testLon float64
 				isTest := false
