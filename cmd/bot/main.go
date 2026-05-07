@@ -512,6 +512,40 @@ func connectTurso() (*sql.DB, error) {
 	return sql.Open("libsql", fmt.Sprintf("%s?authToken=%s", dbURL, token))
 }
 
+func ensureSchema(db *sql.DB) error {
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS session_state (
+			id              TEXT PRIMARY KEY,
+			ext_id          TEXT    NOT NULL DEFAULT '',
+			guid            TEXT    NOT NULL DEFAULT '',
+			active          INTEGER NOT NULL DEFAULT 0,
+			lat             REAL    NOT NULL DEFAULT 0,
+			lon             REAL    NOT NULL DEFAULT 0,
+			alt             INTEGER NOT NULL DEFAULT 2000,
+			park            TEXT    NOT NULL DEFAULT 'arthurs-pass',
+			last_fetch      INTEGER NOT NULL DEFAULT 0,
+			last_routine_nz TEXT    NOT NULL DEFAULT ''
+		)`)
+	if err != nil {
+		return fmt.Errorf("create table: %w", err)
+	}
+
+	// Idempotent: add last_routine_nz if this is an older DB that predates it.
+	_, err = db.Exec(`ALTER TABLE session_state ADD COLUMN last_routine_nz TEXT NOT NULL DEFAULT ''`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("alter table: %w", err)
+	}
+
+	// Seed the one-and-only control row if it doesn't exist yet.
+	_, err = db.Exec(`
+		INSERT INTO session_state (id) VALUES ('garmin_primary')
+		ON CONFLICT(id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("seed row: %w", err)
+	}
+	return nil
+}
+
 func loadState(db *sql.DB) (SessionState, error) {
 	var s SessionState
 	var activeInt int
@@ -591,9 +625,13 @@ func handler(ctx context.Context) error {
 	}
 	defer db.Close()
 
+	if err := ensureSchema(db); err != nil {
+		log.Fatalf("DB schema init failed: %v", err)
+	}
+
 	state, err := loadState(db)
 	if err != nil {
-		log.Printf("Warning: Failed to load state (Is DB setup?): %v\n", err)
+		log.Printf("Warning: Failed to load state: %v\n", err)
 	}
 
 	log.Println("Polling IMAP for commands...")
@@ -723,11 +761,8 @@ func handler(ctx context.Context) error {
 						}
 					}
 
-					msgSet := new(imap.SeqSet)
-					msgSet.AddNum(msg.SeqNum)
-					// scheduled invocation can retry.
 					if sendOK {
-					c.Store(msgSet, item, flags, nil)
+						markSeen(msg.SeqNum)
 					} else {
 						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
 					}
@@ -822,9 +857,7 @@ func handler(ctx context.Context) error {
 					}
 				}
 
-				msgSet := new(imap.SeqSet)
-				msgSet.AddNum(msg.SeqNum)
-				c.Store(msgSet, item, flags, nil)
+				markSeen(msg.SeqNum)
 			}
 		} else {
 			log.Println("IMAP: No UNSEEN messages found.")
