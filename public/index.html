@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACR Alpine Weather — Garmin inReach Guide</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #4f8ef7;
+      --accent-dim: #1e3a6e;
+      --green: #3ecf8e;
+      --yellow: #f6c90e;
+      --red: #e05c5c;
+      --text: #e2e4ed;
+      --muted: #8b90a8;
+      --code-bg: #12141c;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.65;
+      padding: 2rem 1rem 4rem;
+    }
+    .wrap { max-width: 760px; margin: 0 auto; }
+
+    /* Header */
+    header { text-align: center; margin-bottom: 2.5rem; }
+    header h1 {
+      font-size: 1.9rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.02em;
+    }
+    header h1 span { color: var(--accent); }
+    header p { color: var(--muted); margin-top: .4rem; font-size: .95rem; }
+
+    /* Sections */
+    section { margin-bottom: 2rem; }
+    h2 {
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--accent);
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      margin-bottom: 1rem;
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+    }
+    h2::before {
+      content: "";
+      display: inline-block;
+      width: 3px;
+      height: 1.1em;
+      background: var(--accent);
+      border-radius: 2px;
+    }
+
+    /* Steps */
+    .steps { display: flex; flex-direction: column; gap: .75rem; }
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.2rem;
+      display: flex;
+      gap: 1rem;
+      align-items: flex-start;
+    }
+    .step-num {
+      background: var(--accent-dim);
+      color: var(--accent);
+      font-weight: 700;
+      font-size: .85rem;
+      width: 1.8rem;
+      height: 1.8rem;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: .1rem;
+    }
+    .step-body { flex: 1; }
+    .step-body strong { color: #fff; }
+    .step-body p { color: var(--text); font-size: .93rem; margin-top: .25rem; }
+
+    /* Code / message box */
+    .msg-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: .95rem;
+      color: var(--green);
+      letter-spacing: .03em;
+      margin: .6rem 0;
+    }
+    code {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: .1em .4em;
+      font-size: .88em;
+      color: var(--green);
+    }
+
+    /* Info / note box */
+    .note {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius);
+      padding: .85rem 1.1rem;
+      font-size: .9rem;
+      color: var(--muted);
+      margin: .75rem 0;
+    }
+    .note strong { color: var(--text); }
+
+    /* Expected output */
+    .output-block {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem 1.25rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: .85rem;
+      color: var(--text);
+      overflow-x: auto;
+    }
+    .output-block .label {
+      color: var(--muted);
+      font-size: .75rem;
+      text-transform: uppercase;
+      letter-spacing: .1em;
+      margin-bottom: .5rem;
+    }
+    .output-block .line { line-height: 1.8; }
+    .k { color: var(--accent); }
+    .v { color: #e2e4ed; }
+
+    /* Commands table */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: .9rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+    th {
+      background: var(--code-bg);
+      color: var(--muted);
+      font-weight: 600;
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .07em;
+      padding: .65rem 1rem;
+      text-align: left;
+    }
+    td { padding: .7rem 1rem; border-top: 1px solid var(--border); }
+    td:first-child {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      color: var(--green);
+      white-space: nowrap;
+    }
+    td:last-child { color: var(--muted); }
+
+    /* Pill badges */
+    .badge {
+      display: inline-block;
+      padding: .15em .6em;
+      border-radius: 20px;
+      font-size: .75rem;
+      font-weight: 600;
+      letter-spacing: .04em;
+    }
+    .badge-green { background: #0d3324; color: var(--green); }
+    .badge-blue  { background: var(--accent-dim); color: var(--accent); }
+
+    /* Email path section */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.1rem 1.3rem;
+    }
+    .card h3 { font-size: .95rem; color: #fff; margin-bottom: .5rem; }
+    .card p { font-size: .9rem; color: var(--muted); margin-bottom: .6rem; }
+
+    /* Legend grid */
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      gap: .5rem;
+      margin-top: .75rem;
+    }
+    .legend-item {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: .5rem .75rem;
+    }
+    .legend-item .key {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      color: var(--accent);
+      font-size: .85rem;
+      font-weight: 700;
+    }
+    .legend-item .desc { color: var(--muted); font-size: .78rem; margin-top: .15rem; }
+
+    footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: .8rem;
+      margin-top: 3rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>ACR <span>Alpine Weather</span></h1>
+    <p>NZ alpine forecasts delivered to your Garmin inReach via satellite</p>
+  </header>
+
+  <!-- Prerequisites -->
+  <section>
+    <h2>Prerequisites</h2>
+    <div class="note">
+      You need a Garmin inReach device with an active satellite subscription and the
+      <strong>Garmin Explore</strong> app (or <strong>explore.garmin.com</strong>) linked to it.
+    </div>
+  </section>
+
+  <!-- Step 1 -->
+  <section>
+    <h2>Step 1 — Add the bot as a contact</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>Open Garmin Explore</strong>
+          <p>Use the mobile app or visit <a href="https://explore.garmin.com" style="color:var(--accent)">explore.garmin.com</a></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>Go to Contacts → Add Contact</strong>
+          <p>Enter name: <code>ACR Alpine Weather</code></p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body">
+          <strong>Enter the bot email address</strong>
+          <div class="msg-box">wx.acr.apps@gmail.com</div>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <div class="step-body"><strong>Save the contact</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 2 -->
+  <section>
+    <h2>Step 2 — Send the UPDATE message</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <div class="step-body">
+          <strong>Compose a new message</strong>
+          <p>Select <code>ACR Alpine Weather</code> as the recipient on your device</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <div class="step-body">
+          <strong>Type the command</strong>
+          <div class="msg-box">UPDATE</div>
+          <p>Your device will automatically attach your current GPS coordinates and a session token — the bot uses these to fetch the right forecast and route the reply back to you.</p>
+        </div>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <div class="step-body"><strong>Send via satellite</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Step 3 -->
+  <section>
+    <h2>Step 3 — Receive the forecast</h2>
+    <div class="note">
+      <strong>Allow up to 2 minutes.</strong> The bot polls for new messages every minute, then fetches live data from yr.no, MetService NZ, and the NZ Avalanche Centre.
+    </div>
+    <p style="margin: .75rem 0 .5rem; font-size: .9rem; color: var(--muted);">
+      You will receive <strong style="color:var(--text)">1 or 2 messages</strong> (Garmin's 160-char satellite limit):
+    </p>
+    <div class="output-block">
+      <div class="label">Message 1 — Day 1</div>
+      <div class="line"><span class="k">YR</span> <span class="v">T:12C D1:41mm D2:91mm</span> | <span class="k">MS(AOR)</span> <span class="v">D1 Rain w/ heavyFalls S</span> <span class="k">W1k:</span><span class="v">75</span> <span class="k">2k:</span><span class="v">95</span> <span class="k">3k:</span><span class="v">95</span></div>
+    </div>
+    <div class="output-block" style="margin-top:.5rem">
+      <div class="label">Message 2 — Day 2 + Avalanche</div>
+      <div class="line"><span class="k">D2</span> <span class="v">Shwrs then rain</span> <span class="k">W1k:</span><span class="v">100</span> <span class="k">2k:</span><span class="v">110</span> <span class="k">3k:</span><span class="v">120</span> | <span class="k">AVL:</span><span class="v">4-HIGH</span></div>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="key">YR T:</div><div class="desc">Temperature °C (yr.no)</div></div>
+      <div class="legend-item"><div class="key">D1: / D2:</div><div class="desc">Precipitation mm, day 1 / 2</div></div>
+      <div class="legend-item"><div class="key">MS(xxx)</div><div class="desc">MetService park code</div></div>
+      <div class="legend-item"><div class="key">W1k / 2k / 3k</div><div class="desc">Wind km/h at 1000 / 2000 / 3000 m</div></div>
+      <div class="legend-item"><div class="key">AVL:</div><div class="desc">Avalanche danger 1–5 + rating</div></div>
+    </div>
+  </section>
+
+  <!-- Commands -->
+  <section>
+    <h2>All commands</h2>
+    <table>
+      <thead>
+        <tr><th>Message text</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>START</td>
+          <td>Begin tracking — weather sent on location updates and twice daily (07:00 &amp; 19:00 NZT)</td>
+        </tr>
+        <tr>
+          <td>UPDATE</td>
+          <td>One-off immediate weather fetch for your current location</td>
+        </tr>
+        <tr>
+          <td>STOP</td>
+          <td>Stop all automatic updates</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- No device -->
+  <section>
+    <h2>Test without a device</h2>
+    <div class="card">
+      <h3>Email the bot directly</h3>
+      <p>Send an email to <code>wx.acr.apps@gmail.com</code> — the reply arrives in your inbox within ~2 minutes.</p>
+      <table>
+        <thead><tr><th>Subject or body</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>update lat:-43.73, long:170.09</td>
+            <td>Forecast for specific coordinates</td>
+          </tr>
+          <tr>
+            <td>update</td>
+            <td>Forecast for last known location</td>
+          </tr>
+          <tr>
+            <td>all</td>
+            <td>Forecast for every registered NZ national park</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" style="margin-top:.75rem">
+      <h3>HTTP API</h3>
+      <p>Query the forecast directly from any app or browser.</p>
+      <div class="output-block">
+        <div class="line">GET /weather-api?lat=-43.73&amp;lon=170.09</div>
+        <div class="line" style="margin-top:.3rem">GET /weather-api/all</div>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    ACR Alpine Weather &mdash; <a href="https://github.com/romatou18/acr-wx">github.com/romatou18/acr-wx</a>
+  </footer>
+
+</div>
+</body>
+</html>
