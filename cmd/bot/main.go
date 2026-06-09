@@ -677,7 +677,7 @@ func handler(ctx context.Context) error {
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
 			
 			// Establish a fresh Garmin Session using the Turso-stored credentials
-			routineSession, _, _, err := InitGarminSessionFromState(state.ExtID, state.GUID)
+			routineSession, err := InitGarminSessionFromState(state.ExtID, state.GUID)
 			if err != nil {
 				log.Printf("❌ Failed to init routine Garmin session: %v", err)
 			} else {
