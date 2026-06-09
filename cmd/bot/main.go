@@ -566,6 +566,16 @@ func handler(ctx context.Context) error {
 					state.GUID = sessionMatch[2]
 					log.Printf("Extracted Session Tokens: extId=%s", state.ExtID)
 					
+			// Check for Garmin inReach Shortlink
+				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9]+`)
+				shortlink := linkRegex.FindString(bodyStr)
+				
+				if shortlink != "" {
+					log.Printf("Extracted inReach Link: %s", shortlink)
+					
+					// Initialize the live web session using the shortlink
+					session, latStr, lonStr, err := InitGarminSession(shortlink)
+					
 					// Initialize the live web session and extract coordinates
 					session, latStr, lonStr, err := InitGarminSession(state.ExtID, state.GUID)
 					if err != nil {
@@ -573,6 +583,11 @@ func handler(ctx context.Context) error {
 					} else {
 						activeSession = session
 						garminDirty = true
+
+// Save the freshly discovered ExtID and GUID to the Turso database
+						// so that the automated cron broadcasts at 07:00 and 19:00 can still work!
+						state.ExtID = session.ExtID
+						state.GUID = session.Guid
 						
 						// Handle coordinate string-to-float conversion
 						if latStr != "" && lonStr != "" {
