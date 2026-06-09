@@ -43,7 +43,6 @@ type SessionState struct {
 	LastRoutineNZ string
 }
 
-var garminHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
 // GarminSession holds the live connection state between the extraction phase and the posting phase
 type GarminSession struct {
@@ -56,7 +55,11 @@ type GarminSession struct {
 // Phase 1: Establish the session, grab the CSRF token, and extract the coordinates
 func InitGarminSession(extId, guid string) (*GarminSession, string, string, error) {
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar}
+	client := &http.Client{
+    Jar:     jar,
+    Timeout: 10 * time.Second,
+}
+
 	pageURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
 
 	req, _ := http.NewRequest("GET", pageURL, nil)
@@ -641,9 +644,6 @@ func handler(ctx context.Context) error {
 				// Ensure the email is marked as seen so the loop doesn't re-process it infinitely
 				markSeen(msg.SeqNum)
 			}
-
-				
-			}
 		} else {
 			log.Println("IMAP: No UNSEEN messages found.")
 		}
@@ -651,7 +651,7 @@ func handler(ctx context.Context) error {
 		log.Println("IMAP: INBOX is empty.")
 	}
 
-	// 4. ROUTINE BROADCAST CHECK (07:00 / 19:00 NZ wall time)
+		// 4. ROUTINE BROADCAST CHECK (07:00 / 19:00 NZ wall time)
 	loc, tzErr := time.LoadLocation("Pacific/Auckland")
 	if tzErr != nil {
 		log.Printf("Failed to load Pacific/Auckland timezone: %v", tzErr)
@@ -664,12 +664,22 @@ func handler(ctx context.Context) error {
 
 			logRequest(db, "garmin", state.ExtID, "ROUTINE", state.Lat, state.Lon, state.Park)
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
-			sendToGarmin(finalMsg)
-
-			state.LastFetch = time.Now().Unix()
-			state.LastRoutineNZ = slot
-			if err := saveState(db, state); err != nil {
-				log.Printf("Failed to save state after broadcast: %v", err)
+			
+			// Establish a fresh Garmin Session using the Turso-stored credentials
+			routineSession, _, _, err := InitGarminSession(state.ExtID, state.GUID)
+			if err != nil {
+				log.Printf("❌ Failed to init routine Garmin session: %v", err)
+			} else {
+				err = SendGarminReply(routineSession, finalMsg)
+				if err != nil {
+					log.Printf("❌ Failed to send routine broadcast: %v", err)
+				} else {
+					state.LastFetch = time.Now().Unix()
+					state.LastRoutineNZ = slot
+					if err := saveState(db, state); err != nil {
+						log.Printf("Failed to save state after broadcast: %v", err)
+					}
+				}
 			}
 		} else {
 			log.Println("No scheduled broadcast needed at this time.")
