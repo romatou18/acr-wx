@@ -15,6 +15,8 @@ go get github.com/aws/aws-lambda-go/lambda
 go get github.com/emersion/go-imap
 go get github.com/emersion/go-message/mail
 go get github.com/emersion/go-imap/client
+go get github.com/PuerkitoBio/goquery
+
 go mod tidy
 
 # 2. Check for Netlify CLI
