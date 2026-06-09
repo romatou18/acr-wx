@@ -610,6 +610,7 @@ func handler(ctx context.Context) error {
 					log.Printf("Parsed Coordinates: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
 				} else {
 					log.Println("No coordinates found in body. Using existing known coordinates.")
+logRequest(db, "garmin", state.ExtID, "No-coord-in-email-body", 0.0, 0.0, "none")
 				}
 
 				isStale := time.Now().Unix()-state.LastFetch > (12 * 3600)
@@ -621,7 +622,7 @@ func handler(ctx context.Context) error {
 
 					if state.Lat == 0 && state.Lon == 0 {
 						log.Println("Cannot fetch weather: no coordinates available.")
-logRequest(db, "garmin", state.ExtID, No-coord-failed-update, 0.0, 0.0, 0)
+logRequest(db, "garmin", state.ExtID, "coord-zero-value", 0.0, 0.0, "none")
 					} else {
 						cmd := "AUTO"
 						if isUpdateCmd {
