@@ -23,7 +23,10 @@ import (
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
+	"net/http/cookiejar"
+	"github.com/PuerkitoBio/goquery"
 )
+
 
 // ==========================================
 // CONFIGURATION & STRUCTS
@@ -42,7 +45,87 @@ type SessionState struct {
 
 var garminHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
-func sendToGarmin(msg, extId, guid string) {
+func postToGarmin(partNum int, msg, extId, guid string) {
+	// 1. Create a transient client with a CookieJar for this specific execution
+	// It is critical to create a NEW client here rather than using a global one 
+	// to avoid session cross-contamination if multiple requests hit your gateway at once.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		log.Printf("❌ Failed to create cookie jar: %v\n", err)
+		return
+	}
+	client := &http.Client{Jar: jar}
+
+	// 2. Construct the GET URL to establish the session
+	// This mimics a web browser opening the link provided in the email
+	pageURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
+	
+	req, err := http.NewRequest("GET", pageURL, nil)
+	if err != nil {
+		log.Printf("❌ Failed to create GET request: %v\n", err)
+		return
+	}
+	// Mimic a standard browser to avoid triggering basic bot-defense mechanisms
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("❌ Failed to fetch Garmin page: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 3. Parse the HTML to extract the CSRF Token
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		log.Printf("❌ Failed to parse HTML: %v\n", err)
+		return
+	}
+
+	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
+	if !exists {
+		log.Printf("❌ Could not find __RequestVerificationToken. Link may be expired or malformed.\n")
+		return
+	}
+
+	// 4. Build the POST payload, now including the vital security token
+	data := url.Values{}
+	data.Set("__RequestVerificationToken", token)
+	data.Set("Message", msg)
+	data.Set("extId", extId)
+	data.Set("guid", guid)
+
+	// 5. Submit the POST request
+	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
+	postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+	if err != nil {
+		log.Printf("❌ Failed to create POST request: %v\n", err)
+		return
+	}
+	
+	// Add required headers for a form submission
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+	// The Referer header is often strictly validated by ASP.NET backend servers
+	postReq.Header.Set("Referer", pageURL) 
+
+	// Execute POST using the same client, which automatically attaches the cookies saved from the GET request
+	postResp, err := client.Do(postReq)
+	if err != nil {
+		log.Printf("❌ Failed to send to Garmin (part %d): %v\n", partNum, err)
+		return
+	}
+	defer postResp.Body.Close()
+
+	// 6. Evaluate response
+	if postResp.StatusCode == 200 {
+		log.Printf("✅ Sent to Garmin part %d (%d chars): %s\n", partNum, len(msg), msg)
+	} else {
+		log.Printf("❌ Failed to send to Garmin part %d. HTTP Status: %d\n", partNum, postResp.StatusCode)
+	}
+}
+
+func sendToGarmin_old(msg, extId, guid string) {
 	// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
 	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
 	if os.Getenv("GARMIN_DRY_RUN") == "1" {
