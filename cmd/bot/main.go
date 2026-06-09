@@ -59,12 +59,12 @@ func InitGarminSessionFromState(extId, guid string) (*GarminSession, string, str
 }
 
 
-	// Phase 1: Establish the session from a shortlink, grab the CSRF token, and extract the coordinates
-func InitGarminSession(inreachURL string) (*GarminSession, string, string, error) {
+	// Phase 1: Establish the session from a shortlink and grab the CSRF token
+func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
 		Jar:     jar,
-		Timeout: 10 * time.Second, // CRITICAL: Protects Netlify from hanging
+		Timeout: 10 * time.Second, // Protects Netlify from hanging
 	}
 
 	req, _ := http.NewRequest("GET", inreachURL, nil)
@@ -72,52 +72,45 @@ func InitGarminSession(inreachURL string) (*GarminSession, string, string, error
 	
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 
-	// NEW: Extract ExtID and GUID from the final redirected URL
+	// Extract ExtID and GUID from the final redirected URL
 	finalURL := resp.Request.URL
 	extId := finalURL.Query().Get("extId")
 	guid := finalURL.Query().Get("guid")
 
 	if extId == "" || guid == "" {
-		return nil, "", "", fmt.Errorf("redirected URL did not contain extId/guid: %s", finalURL.String())
+		return nil, fmt.Errorf("redirected URL did not contain extId/guid: %s", finalURL.String())
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return nil, "", "", err
+		return nil, err
 	}
 
-	// 1. Extract the vital CSRF Token
+	// Extract the vital CSRF Token
 	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
 	if !exists {
-		return nil, "", "", fmt.Errorf("CSRF token not found in the HTML")
+		return nil, fmt.Errorf("CSRF token not found in the HTML")
 	}
 
-	// 2. Extract Coordinates
-	htmlContent := doc.Text()
-	latLonRegex := regexp.MustCompile(`"Latitude":\s*(-?\d+\.\d+),\s*"Longitude":\s*(-?\d+\.\d+)`)
-	matches := latLonRegex.FindStringSubmatch(htmlContent)
-	
-	lat, lon := "", ""
-	if len(matches) == 3 {
-		lat = matches[1]
-		lon = matches[2]
-	}
-
-	// Package the live session to be used later
 	session := &GarminSession{
 		Client: client,
 		Token:  token,
-		ExtID:  extId, // Saved from the URL redirect!
-		Guid:   guid,  // Saved from the URL redirect!
+		ExtID:  extId,
+		Guid:   guid,
 	}
 
-	return session, lat, lon, nil
+	return session, nil
 }
 
+// Helper for cron broadcasts that don't have an email shortlink
+func InitGarminSessionFromState(extId, guid string) (*GarminSession, error) {
+	longURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
+	return InitGarminSession(longURL)
+}
 
 
 // Phase 2: Post the weather report using the EXACT SAME session
@@ -573,6 +566,28 @@ func handler(ctx context.Context) error {
 				if shortlink != "" {
 					log.Printf("Extracted inReach Link: %s", shortlink)
 					
+					// --- NEW: Extract Coordinates from Email Body ---
+					// Matches: Lat -45.009731 Lon 168.896792
+					latLonRegex := regexp.MustCompile(`Lat\s*([-\d.]+)\s*Lon\s*([-\d.]+)`)
+					coordMatch := latLonRegex.FindStringSubmatch(bodyStr)
+
+					if len(coordMatch) == 3 {
+						newLat, _ := strconv.ParseFloat(coordMatch[1], 64)
+						newLon, _ := strconv.ParseFloat(coordMatch[2], 64)
+						
+						newPark := forecast.GetClosestPark(newLat, newLon)
+						locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
+
+						state.Lat = newLat
+						state.Lon = newLon
+						state.Park = newPark
+						state.Alt = forecast.GetElevation(newLat, newLon)
+						
+						log.Printf("Parsed Coordinates from Email: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
+					} else {
+						log.Println("No coordinates found in the plain text email body.")
+						logRequest(db, "garmin", state.ExtID, "No-coord-in-email", 0.0, 0.0, "none")
+					}
 					// Initialize the live web session using the shortlink. 
 					// This automatically follows the redirect and extracts the ExtID and GUID!
 					session, latStr, lonStr, err := InitGarminSession(shortlink)
