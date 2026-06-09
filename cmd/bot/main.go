@@ -468,67 +468,75 @@ func handler(ctx context.Context) error {
 				}
 				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
 
+						// ... (Inside the IMAP loop, just below where you read the bodyStr) ...
+				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
+
+				// --- NEW CHECK: Identify if the sender is Garmin ---
+				isGarminEmail := strings.Contains(strings.ToLower(senderEmail), "garmin.com") || strings.Contains(strings.ToLower(senderEmail), "inreach")
+
+
 				// 1. TEST COMMAND PARSER (subject OR body)
-				testCoordRegex := regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
-				bareUpdateRegex := regexp.MustCompile(`(?im)^\s*update\s*$`)
-				allRegex := regexp.MustCompile(`(?im)^\s*all\s*$`)
+				// Only run this block if the email is NOT from Garmin
+				if !isGarminEmail {
+					testCoordRegex := regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
+					bareUpdateRegex := regexp.MustCompile(`(?im)^\s*update\s*$`)
+					allRegex := regexp.MustCompile(`(?im)^\s*all\s*$`)
 
-				combined := subject + "\n" + bodyStr
+					combined := subject + "\n" + bodyStr
 
-				// "all" — return forecasts for every registered park
-				if allRegex.MatchString(combined) {
-					log.Println("🗺️ ALL parks command detected! Fetching forecasts for all parks...")
-					logRequest(db, "email", replyTo, "ALL", 0, 0, "all")
-					finalMsg := forecast.BuildAllReports()
-					log.Printf("📋 All-parks report (%d chars):\n%s\n", len(finalMsg), finalMsg)
-					sendOK := true
-					if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
-						sendOK = false
-					}
-					if sendOK {
-						markSeen(msg.SeqNum)
-					} else {
-						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
-					}
-					continue
-				}
-
-				var testLat, testLon float64
-				isTest := false
-
-				if match := testCoordRegex.FindStringSubmatch(combined); len(match) == 3 {
-					testLat, _ = strconv.ParseFloat(match[1], 64)
-					testLon, _ = strconv.ParseFloat(match[2], 64)
-					isTest = true
-				} else if bareUpdateRegex.MatchString(combined) {
-					testLat = state.Lat
-					testLon = state.Lon
-					isTest = true
-				}
-
-				if isTest {
-					log.Println("🧪 Test command detected! Fetching immediate weather...")
-					sendOK := true
-					if testLat == 0 && testLon == 0 {
-						log.Println("Cannot process test update: No coordinates available.")
-					} else {
-						testPark := forecast.GetClosestPark(testLat, testLon)
-						testAlt := forecast.GetElevation(testLat, testLon)
-						logRequest(db, "email", replyTo, "UPDATE", testLat, testLon, testPark)
-						finalMsg := forecast.BuildReport(testLat, testLon, testAlt, testPark)
-						log.Printf("📋 Test weather report (%d chars): %s\n", len(finalMsg), finalMsg)
+					// "all" — return forecasts for every registered park
+					if allRegex.MatchString(combined) {
+						log.Println("🗺️ ALL parks command detected! Fetching forecasts for all parks...")
+						logRequest(db, "email", replyTo, "ALL", 0, 0, "all")
+						finalMsg := forecast.BuildAllReports()
+						sendOK := true
 						if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
 							sendOK = false
 						}
+						if sendOK {
+							markSeen(msg.SeqNum)
+						} else {
+							log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
+						}
+						continue
 					}
 
-					if sendOK {
-						markSeen(msg.SeqNum)
-					} else {
-						log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
+					var testLat, testLon float64
+					isTest := false
+
+					if match := testCoordRegex.FindStringSubmatch(combined); len(match) == 3 {
+						testLat, _ = strconv.ParseFloat(match[1], 64)
+						testLon, _ = strconv.ParseFloat(match[2], 64)
+						isTest = true
+					} else if bareUpdateRegex.MatchString(combined) {
+						testLat = state.Lat
+						testLon = state.Lon
+						isTest = true
 					}
-					continue
-				}
+
+					if isTest {
+						log.Println("🧪 Test command detected! Fetching immediate weather...")
+						sendOK := true
+						if testLat == 0 && testLon == 0 {
+							log.Println("Cannot process test update: No coordinates available.")
+						} else {
+							testPark := forecast.GetClosestPark(testLat, testLon)
+							testAlt := forecast.GetElevation(testLat, testLon)
+							logRequest(db, "email", replyTo, "UPDATE", testLat, testLon, testPark)
+							finalMsg := forecast.BuildReport(testLat, testLon, testAlt, testPark)
+							if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
+								sendOK = false
+							}
+						}
+
+						if sendOK {
+							markSeen(msg.SeqNum)
+						} else {
+							log.Printf("Leaving message %d unread for retry after SMTP failure.", msg.SeqNum)
+						}
+						continue
+					}
+				} // End of !isGarminEmail block
 
 								// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
