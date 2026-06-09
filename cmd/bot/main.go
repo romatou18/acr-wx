@@ -527,7 +527,7 @@ func handler(ctx context.Context) error {
 					continue
 				}
 
-				// 2. GARMIN COMMAND PARSER
+								// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
 					log.Println("Garmin parser: Body section is empty, skipping.")
 					markSeen(msg.SeqNum)
@@ -535,18 +535,46 @@ func handler(ctx context.Context) error {
 				}
 
 				garminDirty := false
+				locationChanged := false
+				var activeSession *GarminSession // Hoist session so it survives the if-block
 
 				// Check for Garmin Session Tokens
 				sessionMatch := regexp.MustCompile(`extId=([^&]+)&guid=([^&]+)`).FindStringSubmatch(bodyStr)
 				if len(sessionMatch) == 3 {
 					state.ExtID = sessionMatch[1]
 					state.GUID = sessionMatch[2]
-     session, newLat, newLon, err := InitGarminSession(state.ExtID, state.GUID)
-					garminDirty = true
 					log.Printf("Extracted Session Tokens: extId=%s", state.ExtID)
+					
+					// Initialize the live web session and extract coordinates
+					session, latStr, lonStr, err := InitGarminSession(state.ExtID, state.GUID)
+					if err != nil {
+						log.Printf("❌ Failed to init Garmin session: %v", err)
+					} else {
+						activeSession = session
+						garminDirty = true
+						
+						// Handle coordinate string-to-float conversion
+						if latStr != "" && lonStr != "" {
+							newLat, _ := strconv.ParseFloat(latStr, 64)
+							newLon, _ := strconv.ParseFloat(lonStr, 64)
+							
+							newPark := forecast.GetClosestPark(newLat, newLon)
+							locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
+
+							state.Lat = newLat
+							state.Lon = newLon
+							state.Park = newPark
+							state.Alt = forecast.GetElevation(newLat, newLon)
+							
+							log.Printf("Parsed Coordinates: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
+						} else {
+							log.Println("No coordinates found in html GET body. Using existing known coordinates.")
+							logRequest(db, "garmin", state.ExtID, "No-coord-in-GET-html-body", 0.0, 0.0, "none")
+						}
+					}
 				} else {
 					log.Println("No Garmin extId/guid found in email.")
-logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 0.0, "no park")
+					logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 0.0, "no park")
 				}
 
 				upperBody := strings.ToUpper(bodyStr)
@@ -557,31 +585,18 @@ logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 
 					logRequest(db, "garmin", state.ExtID, "START", state.Lat, state.Lon, state.Park)
 				} else if strings.Contains(upperBody, "STOP") {
 					state.Active = false
-					sendToGarmin(session, "Server: Updates Paused.")
 					garminDirty = true
 					log.Println("Action: STOP tracking.")
 					logRequest(db, "garmin", state.ExtID, "STOP", state.Lat, state.Lon, state.Park)
+					
+					if activeSession != nil {
+						_ = SendGarminReply(activeSession, "Server: Updates Paused.")
+					}
 				}
 
 				isUpdateCmd := strings.Contains(upperBody, "UPDATE")
 				if isUpdateCmd {
 					log.Println("Action: UPDATE triggered manually via email.")
-				}
-
-				locationChanged := false
-    // newLat, newLong, token, jar := getBodyHtmlExtractTokenAndCoordinates(state.ExtID, state.GUID)
-					newPark := forecast.GetClosestPark(newLat, newLong)
-					locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
-
-					state.Lat = newLat
-					state.Lon = newLon
-					state.Park = newPark
-					state.Alt = forecast.GetElevation(newLat, newLon)
-					garminDirty = true
-					log.Printf("Parsed Coordinates: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
-				} else {
-					log.Println("No coordinates found in html GET body. Using existing known coordinates.")
-logRequest(db, "garmin", state.ExtID, "No-coord-in-GET-html-body", 0.0, 0.0, "none")
 				}
 
 				isStale := time.Now().Unix()-state.LastFetch > (12 * 3600)
@@ -593,18 +608,27 @@ logRequest(db, "garmin", state.ExtID, "No-coord-in-GET-html-body", 0.0, 0.0, "no
 
 					if state.Lat == 0 && state.Lon == 0 {
 						log.Println("Cannot fetch weather: no coordinates available.")
-logRequest(db, "garmin", state.ExtID, "coord-zero-value", 0.0, 0.0, "none")
+						logRequest(db, "garmin", state.ExtID, "coord-zero-value", 0.0, 0.0, "none")
 					} else {
 						cmd := "AUTO"
 						if isUpdateCmd {
 							cmd = "UPDATE"
 						}
 						logRequest(db, "garmin", state.ExtID, cmd, state.Lat, state.Lon, state.Park)
+						
 						finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
-						sendToGarmin(finalMsg, state.ExtID, state.GUID)
-
-						state.LastFetch = time.Now().Unix()
-						garminDirty = true
+						
+						if activeSession != nil {
+							err := SendGarminReply(activeSession, finalMsg)
+							if err != nil {
+								log.Printf("❌ Failed to send weather reply: %v", err)
+							} else {
+								state.LastFetch = time.Now().Unix()
+								garminDirty = true
+							}
+						} else {
+							log.Println("⚠️ Cannot send weather: No active Garmin session.")
+						}
 					}
 				}
 
@@ -613,8 +637,12 @@ logRequest(db, "garmin", state.ExtID, "coord-zero-value", 0.0, 0.0, "none")
 						log.Printf("Failed to save session state to Turso: %v", err)
 					}
 				}
-
+				
+				// Ensure the email is marked as seen so the loop doesn't re-process it infinitely
 				markSeen(msg.SeqNum)
+			}
+
+				
 			}
 		} else {
 			log.Println("IMAP: No UNSEEN messages found.")
