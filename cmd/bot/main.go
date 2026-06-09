@@ -536,7 +536,7 @@ func handler(ctx context.Context) error {
 					}
 				} // End of !isGarminEmail block
 
-					// 2. GARMIN COMMAND PARSER
+								// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
 					log.Println("Garmin parser: Body section is empty, skipping.")
 					markSeen(msg.SeqNum)
@@ -548,14 +548,14 @@ func handler(ctx context.Context) error {
 				var activeSession *GarminSession // Hoist session so it survives the if-block
 					
 				// Check for Garmin inReach Shortlink
-				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9]+`)
+				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9_]+`) // Added _ to regex for safety based on your example URL
 				shortlink := linkRegex.FindString(bodyStr)
 				
 				if shortlink != "" {
 					log.Printf("Extracted inReach Link: %s", shortlink)
 					
 					// --- Extract Coordinates from Email Body ---
-					// Matches: Lat -45.009731 Lon 168.896792
+					// Matches: "Lat -44.578335 Lon 169.628649"
 					latLonRegex := regexp.MustCompile(`Lat\s*([-\d.]+)\s*Lon\s*([-\d.]+)`)
 					coordMatch := latLonRegex.FindStringSubmatch(bodyStr)
 
