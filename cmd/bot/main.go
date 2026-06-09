@@ -101,13 +101,6 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	return session, nil
 }
 
-// Helper for cron broadcasts that don't have an email shortlink
-func InitGarminSessionFromState(extId, guid string) (*GarminSession, error) {
-	longURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
-	return InitGarminSession(longURL)
-}
-
-
 // Phase 2: Post the weather report using the EXACT SAME session
 func SendGarminReply(session *GarminSession, message string) error {
 	// Dry-run mode: email the full report instead of POSTing to Garmin.
