@@ -45,6 +45,61 @@ type SessionState struct {
 
 var garminHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
+// GarminSession holds the live connection state between the extraction phase and the posting phase
+type GarminSession struct {
+	Client *http.Client
+	Token  string
+	ExtID  string
+	Guid   string
+}
+
+// Phase 1: Establish the session, grab the CSRF token, and extract the coordinates
+func InitGarminSession(extId, guid string) (*GarminSession, string, string, error) {
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	pageURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
+
+	req, _ := http.NewRequest("GET", pageURL, nil)
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, "", "", err
+	}
+	defer resp.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		return nil, "", "", err
+	}
+
+	// 1. Extract the vital CSRF Token
+	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
+	if !exists {
+		return nil, "", "", fmt.Errorf("CSRF token not found")
+	}
+
+	// 2. Extract Coordinates (using the regex strategy)
+	htmlContent := doc.Text()
+	latLonRegex := regexp.MustCompile(`"Latitude":\s*(-?\d+\.\d+),\s*"Longitude":\s*(-?\d+\.\d+)`)
+	matches := latLonRegex.FindStringSubmatch(htmlContent)
+	
+	lat, lon := "", ""
+	if len(matches) == 3 {
+		lat = matches[1]
+		lon = matches[2]
+	}
+
+	// Package the live session to be used later
+	session := &GarminSession{
+		Client: client,
+		Token:  token,
+		ExtID:  extId,
+		Guid:   guid,
+	}
+
+	return session, lat, lon, nil
+}
 
 
 // does a get request to the Garmin URL
@@ -150,7 +205,7 @@ func postToGarmin(partNum int, msg, extId, guid string) {
 	}
 }
 
-func sendToGarmin(msg, extId, guid string) {
+func sendToGarmin_old(msg, extId, guid string) {
 	// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
 	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
 	if os.Getenv("GARMIN_DRY_RUN") == "1" {
@@ -168,6 +223,55 @@ func sendToGarmin(msg, extId, guid string) {
 	for i, part := range splitForGarmin(msg) {
 		postToGarmin(i+1, part, extId, guid)
 	}
+}
+
+// Phase 2: Post the weather report using the EXACT SAME session
+func SendGarminReply(session *GarminSession, message string) error {
+
+// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
+	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
+	if os.Getenv("GARMIN_DRY_RUN") == "1" {
+		replyTo := os.Getenv("GARMIN_DRY_RUN_REPLY_TO")
+		if replyTo == "" {
+			replyTo = os.Getenv("EMAIL_USER")
+		}
+		log.Printf("🔧 GARMIN_DRY_RUN: routing report to %s (extId=%s)\n", replyTo, extId)
+		if err := sendTestEmailReply(replyTo, msg, "", "Garmin Dry Run: Weather Report"); err != nil {
+			log.Printf("❌ GARMIN_DRY_RUN email failed: %v\n", err)
+		}
+		return nil
+	}
+
+
+	data := url.Values{}
+	data.Set("__RequestVerificationToken", session.Token)
+	
+	data.Set("extId", session.ExtID)
+	data.Set("guid", session.Guid)
+
+for i, part := range splitForGarmin(msg) {
+data.Set("Message", message)
+	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
+	postReq, _ := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+	
+	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+	postReq.Header.Set("Referer", fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", session.ExtID, session.Guid))
+
+	// Because session.Client contains the cookiejar from Phase 1, Garmin accepts the payload
+	resp, err := session.Client.Do(postReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+  resp.body.Close()
+		return fmt.Errorf("failed to send: HTTP %d", resp.StatusCode)
+	}
+ resp.body.Close()
+}
+return nil
 }
 
 // splitForGarmin splits a report into ≤160-char chunks for the Garmin inReach
@@ -576,6 +680,7 @@ func handler(ctx context.Context) error {
 				if len(sessionMatch) == 3 {
 					state.ExtID = sessionMatch[1]
 					state.GUID = sessionMatch[2]
+     session, newLat, newLon, err := InitGarminSession(state.ExtID, state.GUID)
 					garminDirty = true
 					log.Printf("Extracted Session Tokens: extId=%s", state.ExtID)
 				} else {
@@ -591,7 +696,7 @@ logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 
 					logRequest(db, "garmin", state.ExtID, "START", state.Lat, state.Lon, state.Park)
 				} else if strings.Contains(upperBody, "STOP") {
 					state.Active = false
-					sendToGarmin("Server: Updates Paused.", state.ExtID, state.GUID)
+					sendToGarmin(session, "Server: Updates Paused.")
 					garminDirty = true
 					log.Println("Action: STOP tracking.")
 					logRequest(db, "garmin", state.ExtID, "STOP", state.Lat, state.Lon, state.Park)
@@ -603,7 +708,7 @@ logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 
 				}
 
 				locationChanged := false
-    newLat, newLong, token, jar := getBodyHtmlExtractTokenAndCoordinates(state.ExtID, state.GUID)
+    // newLat, newLong, token, jar := getBodyHtmlExtractTokenAndCoordinates(state.ExtID, state.GUID)
 					newPark := forecast.GetClosestPark(newLat, newLong)
 					locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
 
@@ -670,7 +775,7 @@ logRequest(db, "garmin", state.ExtID, "coord-zero-value", 0.0, 0.0, "none")
 
 			logRequest(db, "garmin", state.ExtID, "ROUTINE", state.Lat, state.Lon, state.Park)
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
-			sendToGarmin(finalMsg, state.ExtID, state.GUID)
+			sendToGarmin(finalMsg)
 
 			state.LastFetch = time.Now().Unix()
 			state.LastRoutineNZ = slot
