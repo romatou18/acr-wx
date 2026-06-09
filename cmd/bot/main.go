@@ -548,7 +548,7 @@ func handler(ctx context.Context) error {
 					}
 				} // End of !isGarminEmail block
 
-								// 2. GARMIN COMMAND PARSER
+						// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
 					log.Println("Garmin parser: Body section is empty, skipping.")
 					markSeen(msg.SeqNum)
@@ -558,33 +558,25 @@ func handler(ctx context.Context) error {
 				garminDirty := false
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
-
-				// Check for Garmin Session Tokens
-				sessionMatch := regexp.MustCompile(`extId=([^&]+)&guid=([^&]+)`).FindStringSubmatch(bodyStr)
-				if len(sessionMatch) == 3 {
-					state.ExtID = sessionMatch[1]
-					state.GUID = sessionMatch[2]
-					log.Printf("Extracted Session Tokens: extId=%s", state.ExtID)
 					
-			// Check for Garmin inReach Shortlink
+				// Check for Garmin inReach Shortlink (We no longer look for extId in the email text)
 				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9]+`)
 				shortlink := linkRegex.FindString(bodyStr)
 				
 				if shortlink != "" {
 					log.Printf("Extracted inReach Link: %s", shortlink)
 					
-					// Initialize the live web session using the shortlink
+					// Initialize the live web session using the shortlink. 
+					// This automatically follows the redirect and extracts the ExtID and GUID!
 					session, latStr, lonStr, err := InitGarminSession(shortlink)
 					
-					// Initialize the live web session and extract coordinates
-					session, latStr, lonStr, err := InitGarminSession(state.ExtID, state.GUID)
 					if err != nil {
 						log.Printf("❌ Failed to init Garmin session: %v", err)
 					} else {
 						activeSession = session
 						garminDirty = true
 
-// Save the freshly discovered ExtID and GUID to the Turso database
+						// Save the freshly discovered ExtID and GUID to the Turso database
 						// so that the automated cron broadcasts at 07:00 and 19:00 can still work!
 						state.ExtID = session.ExtID
 						state.GUID = session.Guid
@@ -609,8 +601,8 @@ func handler(ctx context.Context) error {
 						}
 					}
 				} else {
-					log.Println("No Garmin extId/guid found in email.")
-					logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 0.0, "no park")
+					log.Println("No inreachlink.com URL found in email.")
+					logRequest(db, "garmin", "no link", "update no link found in email", 0.0, 0.0, "no park")
 				}
 
 				upperBody := strings.ToUpper(bodyStr)
