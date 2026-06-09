@@ -52,17 +52,15 @@ type GarminSession struct {
 	Guid   string
 }
 
-// Phase 1: Establish the session, grab the CSRF token, and extract the coordinates
-func InitGarminSession(extId, guid string) (*GarminSession, string, string, error) {
+	// Phase 1: Establish the session from a shortlink, grab the CSRF token, and extract the coordinates
+func InitGarminSession(inreachURL string) (*GarminSession, string, string, error) {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
-    Jar:     jar,
-    Timeout: 10 * time.Second,
-}
+		Jar:     jar,
+		Timeout: 10 * time.Second, // CRITICAL: Protects Netlify from hanging
+	}
 
-	pageURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
-
-	req, _ := http.NewRequest("GET", pageURL, nil)
+	req, _ := http.NewRequest("GET", inreachURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
 	
 	resp, err := client.Do(req)
@@ -70,6 +68,15 @@ func InitGarminSession(extId, guid string) (*GarminSession, string, string, erro
 		return nil, "", "", err
 	}
 	defer resp.Body.Close()
+
+	// NEW: Extract ExtID and GUID from the final redirected URL
+	finalURL := resp.Request.URL
+	extId := finalURL.Query().Get("extId")
+	guid := finalURL.Query().Get("guid")
+
+	if extId == "" || guid == "" {
+		return nil, "", "", fmt.Errorf("redirected URL did not contain extId/guid: %s", finalURL.String())
+	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
@@ -79,10 +86,10 @@ func InitGarminSession(extId, guid string) (*GarminSession, string, string, erro
 	// 1. Extract the vital CSRF Token
 	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
 	if !exists {
-		return nil, "", "", fmt.Errorf("CSRF token not found")
+		return nil, "", "", fmt.Errorf("CSRF token not found in the HTML")
 	}
 
-	// 2. Extract Coordinates (using the regex strategy)
+	// 2. Extract Coordinates
 	htmlContent := doc.Text()
 	latLonRegex := regexp.MustCompile(`"Latitude":\s*(-?\d+\.\d+),\s*"Longitude":\s*(-?\d+\.\d+)`)
 	matches := latLonRegex.FindStringSubmatch(htmlContent)
@@ -97,12 +104,15 @@ func InitGarminSession(extId, guid string) (*GarminSession, string, string, erro
 	session := &GarminSession{
 		Client: client,
 		Token:  token,
-		ExtID:  extId,
-		Guid:   guid,
+		ExtID:  extId, // Saved from the URL redirect!
+		Guid:   guid,  // Saved from the URL redirect!
 	}
 
 	return session, lat, lon, nil
 }
+
+
+
 // Phase 2: Post the weather report using the EXACT SAME session
 func SendGarminReply(session *GarminSession, message string) error {
 	// Dry-run mode: email the full report instead of POSTing to Garmin.
