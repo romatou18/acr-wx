@@ -45,8 +45,13 @@ type SessionState struct {
 
 var garminHTTPClient = &http.Client{Timeout: 5 * time.Second}
 
-func postToGarmin(partNum int, msg, extId, guid string) {
-	// 1. Create a transient client with a CookieJar for this specific execution
+
+
+// does a get request to the Garmin URL
+//extracts the CSRF token and the latitude and longitude. 
+func getBodyHtmlExtractTokenAndCoordinates(extId, guide string) float64, float64, string, cookiejar {
+
+// 1. Create a transient client with a CookieJar for this specific execution
 	// It is critical to create a NEW client here rather than using a global one 
 	// to avoid session cross-contamination if multiple requests hit your gateway at once.
 	jar, err := cookiejar.New(nil)
@@ -75,19 +80,6 @@ func postToGarmin(partNum int, msg, extId, guid string) {
 	}
 	defer resp.Body.Close()
 
-	// 3. Parse the HTML to extract the CSRF Token
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		log.Printf("❌ Failed to parse HTML: %v\n", err)
-		return
-	}
-
-	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
-	if !exists {
-		log.Printf("❌ Could not find __RequestVerificationToken. Link may be expired or malformed.\n")
-		return
-	}
-
 // Extracting coordinates 
 // Example: Using regex to find the coordinates in the raw HTML string
 htmlContent := doc.Text() 
@@ -104,6 +96,22 @@ if len(matches) == 3 {
     log.Println("Could not parse coordinates. The device may not have had a GPS lock.")
  return
 }
+// 3. Parse the HTML to extract the CSRF Token
+	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	if err != nil {
+		log.Printf("❌ Failed to parse HTML: %v\n", err)
+		return
+	}
+
+	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
+	if !exists {
+		log.Printf("❌ Could not find __RequestVerificationToken. Link may be expired or malformed.\n")
+		return
+	}
+  return latitude, longitude, token, jar
+}
+
+func postToGarmin(partNum int, msg, extId, guid string) {
 
 	// 4. Build the POST payload, now including the vital security token
 	data := url.Values{}
@@ -572,6 +580,7 @@ func handler(ctx context.Context) error {
 					log.Printf("Extracted Session Tokens: extId=%s", state.ExtID)
 				} else {
 					log.Println("No Garmin extId/guid found in email.")
+logRequest(db, "garmin", "no guid", "update no extID/guid found in email", 0.0, 0.0, "no park")
 				}
 
 				upperBody := strings.ToUpper(bodyStr)
@@ -594,12 +603,8 @@ func handler(ctx context.Context) error {
 				}
 
 				locationChanged := false
-				coordMatch := regexp.MustCompile(`Lat:\s*([-\d.]+)\s*Lon:\s*([-\d.]+)`).FindStringSubmatch(bodyStr)
-				if len(coordMatch) == 3 {
-					newLat, _ := strconv.ParseFloat(coordMatch[1], 64)
-					newLon, _ := strconv.ParseFloat(coordMatch[2], 64)
-
-					newPark := forecast.GetClosestPark(newLat, newLon)
+    newLat, newLong, token, jar := getBodyHtmlExtractTokenAndCoordinates(state.ExtID, state.GUID)
+					newPark := forecast.GetClosestPark(newLat, newLong)
 					locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
 
 					state.Lat = newLat
@@ -609,8 +614,8 @@ func handler(ctx context.Context) error {
 					garminDirty = true
 					log.Printf("Parsed Coordinates: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
 				} else {
-					log.Println("No coordinates found in body. Using existing known coordinates.")
-logRequest(db, "garmin", state.ExtID, "No-coord-in-email-body", 0.0, 0.0, "none")
+					log.Println("No coordinates found in html GET body. Using existing known coordinates.")
+logRequest(db, "garmin", state.ExtID, "No-coord-in-GET-html-body", 0.0, 0.0, "none")
 				}
 
 				isStale := time.Now().Unix()-state.LastFetch > (12 * 3600)
