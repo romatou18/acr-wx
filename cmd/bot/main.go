@@ -52,11 +52,6 @@ type GarminSession struct {
 	Guid   string
 }
 
-// Helper for cron broadcasts that don't have an email shortlink
-func InitGarminSessionFromState(extId, guid string) (*GarminSession, string, string, error) {
-	longURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
-	return InitGarminSession(longURL)
-}
 
 
 	// Phase 1: Establish the session from a shortlink and grab the CSRF token
@@ -548,7 +543,7 @@ func handler(ctx context.Context) error {
 					}
 				} // End of !isGarminEmail block
 
-						// 2. GARMIN COMMAND PARSER
+					// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
 					log.Println("Garmin parser: Body section is empty, skipping.")
 					markSeen(msg.SeqNum)
@@ -559,14 +554,14 @@ func handler(ctx context.Context) error {
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
 					
-				// Check for Garmin inReach Shortlink (We no longer look for extId in the email text)
+				// Check for Garmin inReach Shortlink
 				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9]+`)
 				shortlink := linkRegex.FindString(bodyStr)
 				
 				if shortlink != "" {
 					log.Printf("Extracted inReach Link: %s", shortlink)
 					
-					// --- NEW: Extract Coordinates from Email Body ---
+					// --- Extract Coordinates from Email Body ---
 					// Matches: Lat -45.009731 Lon 168.896792
 					latLonRegex := regexp.MustCompile(`Lat\s*([-\d.]+)\s*Lon\s*([-\d.]+)`)
 					coordMatch := latLonRegex.FindStringSubmatch(bodyStr)
@@ -588,39 +583,18 @@ func handler(ctx context.Context) error {
 						log.Println("No coordinates found in the plain text email body.")
 						logRequest(db, "garmin", state.ExtID, "No-coord-in-email", 0.0, 0.0, "none")
 					}
-					// Initialize the live web session using the shortlink. 
-					// This automatically follows the redirect and extracts the ExtID and GUID!
-					session, latStr, lonStr, err := InitGarminSession(shortlink)
 					
+					// Establish the security session for the reply by following the shortlink
+					session, err := InitGarminSession(shortlink)
 					if err != nil {
 						log.Printf("❌ Failed to init Garmin session: %v", err)
 					} else {
 						activeSession = session
 						garminDirty = true
-
-						// Save the freshly discovered ExtID and GUID to the Turso database
-						// so that the automated cron broadcasts at 07:00 and 19:00 can still work!
+						
+						// Save the ExtID and GUID to Turso for routine cron broadcasts
 						state.ExtID = session.ExtID
 						state.GUID = session.Guid
-						
-						// Handle coordinate string-to-float conversion
-						if latStr != "" && lonStr != "" {
-							newLat, _ := strconv.ParseFloat(latStr, 64)
-							newLon, _ := strconv.ParseFloat(lonStr, 64)
-							
-							newPark := forecast.GetClosestPark(newLat, newLon)
-							locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
-
-							state.Lat = newLat
-							state.Lon = newLon
-							state.Park = newPark
-							state.Alt = forecast.GetElevation(newLat, newLon)
-							
-							log.Printf("Parsed Coordinates: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
-						} else {
-							log.Println("No coordinates found in html GET body. Using existing known coordinates.")
-							logRequest(db, "garmin", state.ExtID, "No-coord-in-GET-html-body", 0.0, 0.0, "none")
-						}
 					}
 				} else {
 					log.Println("No inreachlink.com URL found in email.")
@@ -628,6 +602,8 @@ func handler(ctx context.Context) error {
 				}
 
 				upperBody := strings.ToUpper(bodyStr)
+                // ... (The START / STOP / UPDATE logic continues directly below this) ...
+
 				if strings.Contains(upperBody, "START") {
 					state.Active = true
 					garminDirty = true
