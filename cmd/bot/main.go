@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/cookiejar"
 	"net/smtp"
 	"net/url"
 	"os"
@@ -19,14 +20,12 @@ import (
 
 	"acr-wx/internal/forecast"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
-	"net/http/cookiejar"
-	"github.com/PuerkitoBio/goquery"
 )
-
 
 // ==========================================
 // CONFIGURATION & STRUCTS
@@ -43,7 +42,6 @@ type SessionState struct {
 	LastRoutineNZ string
 }
 
-
 // GarminSession holds the live connection state between the extraction phase and the posting phase
 type GarminSession struct {
 	Client *http.Client
@@ -52,9 +50,7 @@ type GarminSession struct {
 	Guid   string
 }
 
-
-
-	// Phase 1: Establish the session from a shortlink and grab the CSRF token
+// Phase 1: Establish the session from a shortlink and grab the CSRF token
 func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{
@@ -64,7 +60,7 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 
 	req, _ := http.NewRequest("GET", inreachURL, nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-	
+
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -101,6 +97,12 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	return session, nil
 }
 
+// Helper for cron broadcasts that don't have an email shortlink
+func InitGarminSessionFromState(extId, guid string) (*GarminSession, error) {
+	longURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
+	return InitGarminSession(longURL)
+}
+
 // Phase 2: Post the weather report using the EXACT SAME session
 func SendGarminReply(session *GarminSession, message string) error {
 	// Dry-run mode: email the full report instead of POSTing to Garmin.
@@ -127,7 +129,7 @@ func SendGarminReply(session *GarminSession, message string) error {
 
 	// Iterate over the chunks and send them one by one
 	for partNum, part := range splitForGarmin(message) {
-		data.Set("Message", part) // FIX: Using the chunk, not the whole message
+		data.Set("Message", part)
 
 		postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
 		if err != nil {
@@ -148,17 +150,14 @@ func SendGarminReply(session *GarminSession, message string) error {
 			resp.Body.Close()
 			return fmt.Errorf("garmin rejected part %d with HTTP %d", partNum+1, resp.StatusCode)
 		}
-		
+
 		log.Printf("✅ Sent to Garmin part %d/%d (%d chars)", partNum+1, len(splitForGarmin(message)), len(part))
-		resp.Body.Close() // FIX: Close manually inside the loop to prevent descriptor leaks
+		resp.Body.Close()
 	}
-	
+
 	return nil
 }
 
-// splitForGarmin splits a report into ≤160-char chunks for the Garmin inReach
-// 160-char SMS limit. The natural boundary is " | D2 " which separates the
-// Day 1 and Day 2 forecast sections.
 func splitForGarmin(msg string) []string {
 	if len(msg) <= 160 {
 		return []string{msg}
@@ -166,7 +165,6 @@ func splitForGarmin(msg string) []string {
 	if i := strings.Index(msg, " | D2 "); i != -1 {
 		return []string{msg[:i], msg[i+3:]}
 	}
-	// Fallback: find the last space before byte 160 and split there.
 	cut := 160
 	for cut > 0 && msg[cut] != ' ' {
 		cut--
@@ -208,8 +206,8 @@ func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) err
 		"Content-Type: text/plain; charset=UTF-8",
 	}
 	if inReplyToMsgID != "" {
-		headers = append(headers, "In-Reply-To: "+inReplyToMsgID)
-		headers = append(headers, "References: "+inReplyToMsgID)
+		headers = append(headers, "In-Reply-To: " + inReplyToMsgID)
+		headers = append(headers, "References: " + inReplyToMsgID)
 	}
 
 	body := "Alpine Weather Report (short condensed for Garmin inreach/messenger):\r\n\r\n" + report + "\r\n"
@@ -253,13 +251,11 @@ func ensureSchema(db *sql.DB) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	// Idempotent: add last_routine_nz if this is an older DB that predates it.
 	_, err = db.Exec(`ALTER TABLE session_state ADD COLUMN last_routine_nz TEXT NOT NULL DEFAULT ''`)
 	if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
 		return fmt.Errorf("alter table: %w", err)
 	}
 
-	// Seed the one-and-only control row if it doesn't exist yet.
 	_, err = db.Exec(`
 		INSERT INTO session_state (id) VALUES ('garmin_primary')
 		ON CONFLICT(id) DO NOTHING`)
@@ -364,8 +360,7 @@ func shouldRoutineBroadcast(state SessionState, nowNZ time.Time) bool {
 
 // ==========================================
 // MAIN HANDLER
-// ==========================================
-
+// ====
 func handler(ctx context.Context) error {
 	db, err := connectTurso()
 	if err != nil {
