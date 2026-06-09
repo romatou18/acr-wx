@@ -1,5 +1,5 @@
 [build]
-  command = "bash scripts/init sh && bash scripts/build.sh"
+  command = "bash scripts/init.sh && bash scripts/build.sh"
   publish   = "public"
   functions = "functions"
 
