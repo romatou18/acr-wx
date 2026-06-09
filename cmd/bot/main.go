@@ -52,6 +52,13 @@ type GarminSession struct {
 	Guid   string
 }
 
+// Helper for cron broadcasts that don't have an email shortlink
+func InitGarminSessionFromState(extId, guid string) (*GarminSession, string, string, error) {
+	longURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
+	return InitGarminSession(longURL)
+}
+
+
 	// Phase 1: Establish the session from a shortlink, grab the CSRF token, and extract the coordinates
 func InitGarminSession(inreachURL string) (*GarminSession, string, string, error) {
 	jar, _ := cookiejar.New(nil)
