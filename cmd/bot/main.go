@@ -100,178 +100,59 @@ func InitGarminSession(extId, guid string) (*GarminSession, string, string, erro
 
 	return session, lat, lon, nil
 }
-
-
-// does a get request to the Garmin URL
-//extracts the CSRF token and the latitude and longitude. 
-func getBodyHtmlExtractTokenAndCoordinates(extId, guide string) float64, float64, string, cookiejar {
-
-// 1. Create a transient client with a CookieJar for this specific execution
-	// It is critical to create a NEW client here rather than using a global one 
-	// to avoid session cross-contamination if multiple requests hit your gateway at once.
-	jar, err := cookiejar.New(nil)
-	if err != nil {
-		log.Printf("❌ Failed to create cookie jar: %v\n", err)
-		return
-	}
-	client := &http.Client{Jar: jar}
-
-	// 2. Construct the GET URL to establish the session
-	// This mimics a web browser opening the link provided in the email
-	pageURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", extId, guid)
-	
-	req, err := http.NewRequest("GET", pageURL, nil)
-	if err != nil {
-		log.Printf("❌ Failed to create GET request: %v\n", err)
-		return
-	}
-	// Mimic a standard browser to avoid triggering basic bot-defense mechanisms
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("❌ Failed to fetch Garmin page: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-
-// Extracting coordinates 
-// Example: Using regex to find the coordinates in the raw HTML string
-htmlContent := doc.Text() 
-latLonRegex := regexp.MustCompile(`"Latitude":\s*(-?\d+\.\d+),\s*"Longitude":\s*(-?\d+\.\d+)`)
-matches := latLonRegex.FindStringSubmatch(htmlContent)
-
-if len(matches) == 3 {
-    latitude := matches[1]
-    longitude := matches[2]
-    log.Printf("Extracted coordinates: %s, %s\n", latitude, longitude)
-    
-    // Pass these coordinates to your MetService API integration
-} else {
-    log.Println("Could not parse coordinates. The device may not have had a GPS lock.")
- return
-}
-// 3. Parse the HTML to extract the CSRF Token
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
-	if err != nil {
-		log.Printf("❌ Failed to parse HTML: %v\n", err)
-		return
-	}
-
-	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
-	if !exists {
-		log.Printf("❌ Could not find __RequestVerificationToken. Link may be expired or malformed.\n")
-		return
-	}
-  return latitude, longitude, token, jar
-}
-
-func postToGarmin(partNum int, msg, extId, guid string) {
-
-	// 4. Build the POST payload, now including the vital security token
-	data := url.Values{}
-	data.Set("__RequestVerificationToken", token)
-	data.Set("Message", msg)
-	data.Set("extId", extId)
-	data.Set("guid", guid)
-
-	// 5. Submit the POST request
-	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
-	postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		log.Printf("❌ Failed to create POST request: %v\n", err)
-		return
-	}
-	
-	// Add required headers for a form submission
-	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	// The Referer header is often strictly validated by ASP.NET backend servers
-	postReq.Header.Set("Referer", pageURL) 
-
-	// Execute POST using the same client, which automatically attaches the cookies saved from the GET request
-	postResp, err := client.Do(postReq)
-	if err != nil {
-		log.Printf("❌ Failed to send to Garmin (part %d): %v\n", partNum, err)
-		return
-	}
-	defer postResp.Body.Close()
-
-	// 6. Evaluate response
-	if postResp.StatusCode == 200 {
-		log.Printf("✅ Sent to Garmin part %d (%d chars): %s\n", partNum, len(msg), msg)
-	} else {
-		log.Printf("❌ Failed to send to Garmin part %d. HTTP Status: %d\n", partNum, postResp.StatusCode)
-	}
-}
-
-func sendToGarmin_old(msg, extId, guid string) {
-	// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
-	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
-	if os.Getenv("GARMIN_DRY_RUN") == "1" {
-		replyTo := os.Getenv("GARMIN_DRY_RUN_REPLY_TO")
-		if replyTo == "" {
-			replyTo = os.Getenv("EMAIL_USER")
-		}
-		log.Printf("🔧 GARMIN_DRY_RUN: routing report to %s (extId=%s)\n", replyTo, extId)
-		if err := sendTestEmailReply(replyTo, msg, "", "Garmin Dry Run: Weather Report"); err != nil {
-			log.Printf("❌ GARMIN_DRY_RUN email failed: %v\n", err)
-		}
-		return
-	}
-
-	for i, part := range splitForGarmin(msg) {
-		postToGarmin(i+1, part, extId, guid)
-	}
-}
-
 // Phase 2: Post the weather report using the EXACT SAME session
 func SendGarminReply(session *GarminSession, message string) error {
-
-// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
-	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
+	// Dry-run mode: email the full report instead of POSTing to Garmin.
 	if os.Getenv("GARMIN_DRY_RUN") == "1" {
 		replyTo := os.Getenv("GARMIN_DRY_RUN_REPLY_TO")
 		if replyTo == "" {
 			replyTo = os.Getenv("EMAIL_USER")
 		}
-		log.Printf("🔧 GARMIN_DRY_RUN: routing report to %s (extId=%s)\n", replyTo, extId)
-		if err := sendTestEmailReply(replyTo, msg, "", "Garmin Dry Run: Weather Report"); err != nil {
+		log.Printf("🔧 GARMIN_DRY_RUN: routing report to %s (extId=%s)\n", replyTo, session.ExtID)
+		if err := sendTestEmailReply(replyTo, message, "", "Garmin Dry Run: Weather Report"); err != nil {
 			log.Printf("❌ GARMIN_DRY_RUN email failed: %v\n", err)
 		}
 		return nil
 	}
 
-
+	// Pre-load the session constants
 	data := url.Values{}
 	data.Set("__RequestVerificationToken", session.Token)
-	
 	data.Set("extId", session.ExtID)
 	data.Set("guid", session.Guid)
 
-for i, part := range splitForGarmin(msg) {
-data.Set("Message", message)
 	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
-	postReq, _ := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+	refererURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", session.ExtID, session.Guid)
+
+	// Iterate over the chunks and send them one by one
+	for partNum, part := range splitForGarmin(message) {
+		data.Set("Message", part) // FIX: Using the chunk, not the whole message
+
+		postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+		if err != nil {
+			log.Printf("❌ Failed to build request for part %d: %v\n", partNum+1, err)
+			continue
+		}
+
+		postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+		postReq.Header.Set("Referer", refererURL)
+
+		resp, err := session.Client.Do(postReq)
+		if err != nil {
+			return fmt.Errorf("failed to send part %d: %v", partNum+1, err)
+		}
+
+		if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return fmt.Errorf("garmin rejected part %d with HTTP %d", partNum+1, resp.StatusCode)
+		}
+		
+		log.Printf("✅ Sent to Garmin part %d/%d (%d chars)", partNum+1, len(splitForGarmin(message)), len(part))
+		resp.Body.Close() // FIX: Close manually inside the loop to prevent descriptor leaks
+	}
 	
-	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
-	postReq.Header.Set("Referer", fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", session.ExtID, session.Guid))
-
-	// Because session.Client contains the cookiejar from Phase 1, Garmin accepts the payload
-	resp, err := session.Client.Do(postReq)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-  resp.body.Close()
-		return fmt.Errorf("failed to send: HTTP %d", resp.StatusCode)
-	}
- resp.body.Close()
-}
-return nil
+	return nil
 }
 
 // splitForGarmin splits a report into ≤160-char chunks for the Garmin inReach
@@ -293,26 +174,6 @@ func splitForGarmin(msg string) []string {
 		cut = 160
 	}
 	return []string{msg[:cut], strings.TrimSpace(msg[cut:])}
-}
-
-func postToGarmin_old(partNum int, msg, extId, guid string) {
-	data := url.Values{}
-	data.Set("Message", msg)
-	data.Set("extId", extId)
-	data.Set("guid", guid)
-
-	resp, err := garminHTTPClient.PostForm("https://explore.garmin.com/TextMessage/TxtMsg", data)
-	if err != nil {
-		log.Printf("❌ Failed to send to Garmin (part %d): %v\n", partNum, err)
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 200 {
-		log.Printf("✅ Sent to Garmin part %d/%d (%d chars): %s\n", partNum, partNum, len(msg), msg)
-	} else {
-		log.Printf("❌ Failed to send to Garmin part %d. Status: %d\n", partNum, resp.StatusCode)
-	}
 }
 
 func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) error {
