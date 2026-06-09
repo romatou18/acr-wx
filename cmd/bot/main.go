@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/emersion/go-imap"
 	"github.com/emersion/go-imap/client"
+	"github.com/emersion/go-message/mail"
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
@@ -42,15 +44,8 @@ type SessionState struct {
 	LastRoutineNZ string
 }
 
-// GarminSession holds the live connection state between the extraction phase and the posting phase
-type GarminSession struct {
-	Client *http.Client
-	Token  string
-	ExtID  string
-	Guid   string
-}
-
 // GarminSession holds the live connection state, cookies, and tokens
+// between the extraction phase and the posting phase.
 type GarminSession struct {
 	Client *http.Client
 	Token  string
@@ -71,7 +66,7 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Spoof a standard desktop browser to avoid bot-blocking
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
@@ -109,6 +104,20 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 		ExtID:  extId,
 		Guid:   guid,
 	}, nil
+}
+
+// InitGarminSessionFromState rebuilds a live Garmin session from the extId/guid
+// tokens persisted in Turso. Used by the routine 07:00/19:00 broadcasts, where
+// no fresh inreachlink.com shortlink is available. Hitting the TxtMsg page
+// directly with the stored tokens performs the same cookie + CSRF handshake
+// as following a shortlink.
+func InitGarminSessionFromState(extID, guid string) (*GarminSession, error) {
+	if extID == "" || guid == "" {
+		return nil, fmt.Errorf("cannot init Garmin session: empty extId/guid in state")
+	}
+	u := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s",
+		url.QueryEscape(extID), url.QueryEscape(guid))
+	return InitGarminSession(u)
 }
 
 // Phase 2: Post the message chunks back using the active session
@@ -150,7 +159,7 @@ func SendGarminReply(session *GarminSession, message string) error {
 			resp.Body.Close()
 			return fmt.Errorf("garmin server rejected part %d. HTTP Status: %d", partNum+1, resp.StatusCode)
 		}
-		
+
 		log.Printf("✅ Successfully sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
 		resp.Body.Close()
 
@@ -180,6 +189,83 @@ func splitForGarmin(msg string) []string {
 	return []string{msg[:cut], strings.TrimSpace(msg[cut:])}
 }
 
+// ==========================================
+// EMAIL (MIME DECODING + SMTP REPLY)
+// ==========================================
+
+// extractEmailBody walks the raw RFC 822 message and returns the decoded,
+// human-readable body text.
+//
+// msg.GetBody(&imap.BodySectionName{}) hands back the *raw* message: MIME
+// headers, multipart boundaries, and content that is usually quoted-printable
+// or base64 encoded. Regexing that directly fails silently on anything that
+// isn't simple 7-bit plain text (Garmin/Gmail multipart messages, "=2E"
+// soft line breaks splitting coordinates, etc.).
+//
+// go-message/mail transparently decodes Content-Transfer-Encoding and
+// charsets per part. We prefer the first text/plain part; if only HTML
+// exists, we strip it to text via goquery. As a last resort we return the
+// raw string so legacy behaviour is preserved.
+func extractEmailBody(raw []byte) string {
+	mr, err := mail.CreateReader(bytes.NewReader(raw))
+	if err != nil {
+		// Not parseable as a MIME message — fall back to the raw bytes.
+		log.Printf("MIME: CreateReader failed (%v), falling back to raw body", err)
+		return string(raw)
+	}
+
+	var plain, html string
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Printf("MIME: NextPart error: %v", err)
+			break
+		}
+
+		h, ok := p.Header.(*mail.InlineHeader)
+		if !ok {
+			continue // skip attachments
+		}
+		ctype, _, _ := h.ContentType()
+		b, rerr := io.ReadAll(p.Body)
+		if rerr != nil {
+			continue
+		}
+		switch ctype {
+		case "text/plain":
+			if plain == "" {
+				plain = string(b)
+			}
+		case "text/html":
+			if html == "" {
+				html = string(b)
+			}
+		}
+	}
+
+	if plain != "" {
+		return plain
+	}
+	if html != "" {
+		if doc, err := goquery.NewDocumentFromReader(strings.NewReader(html)); err == nil {
+			return doc.Text()
+		}
+		return html
+	}
+	return string(raw)
+}
+
+// sanitizeHeaderValue strips CR/LF so attacker-controlled values (inbound
+// Subject, Reply-To) can't inject extra SMTP headers into our reply.
+func sanitizeHeaderValue(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	return strings.TrimSpace(s)
+}
+
 func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) error {
 	from := os.Getenv("EMAIL_USER")
 	pass := os.Getenv("EMAIL_PASS")
@@ -192,7 +278,8 @@ func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) err
 		return err
 	}
 
-	subject := strings.TrimSpace(origSubject)
+	toEmail = sanitizeHeaderValue(toEmail)
+	subject := sanitizeHeaderValue(origSubject)
 	if subject == "" {
 		subject = "Alpine Weather Test Report"
 	} else if !strings.HasPrefix(strings.ToLower(subject), "re:") {
@@ -211,8 +298,9 @@ func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) err
 		"Content-Type: text/plain; charset=UTF-8",
 	}
 	if inReplyToMsgID != "" {
-		headers = append(headers, "In-Reply-To: " + inReplyToMsgID)
-		headers = append(headers, "References: " + inReplyToMsgID)
+		inReplyToMsgID = sanitizeHeaderValue(inReplyToMsgID)
+		headers = append(headers, "In-Reply-To: "+inReplyToMsgID)
+		headers = append(headers, "References: "+inReplyToMsgID)
 	}
 
 	body := "Alpine Weather Report (short condensed for Garmin inreach/messenger):\r\n\r\n" + report + "\r\n"
@@ -365,7 +453,7 @@ func shouldRoutineBroadcast(state SessionState, nowNZ time.Time) bool {
 
 // ==========================================
 // MAIN HANDLER
-// ====
+// ==========================================
 func handler(ctx context.Context) error {
 	db, err := connectTurso()
 	if err != nil {
@@ -458,20 +546,17 @@ func handler(ctx context.Context) error {
 				}
 				log.Printf("Processing email from: %s, Subject: %s", senderEmail, subject)
 
-				// Read body once — both test and Garmin parsers need it.
+				// Read the raw body once, then decode the MIME structure into
+				// plain text — both the test and Garmin parsers regex this.
 				var bodyStr string
 				if r := msg.GetBody(section); r != nil {
-					b, _ := io.ReadAll(r)
-					bodyStr = string(b)
+					raw, _ := io.ReadAll(r)
+					bodyStr = extractEmailBody(raw)
 				}
-				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
+				log.Printf("Reading email body (decoded length: %d bytes)", len(bodyStr))
 
-						// ... (Inside the IMAP loop, just below where you read the bodyStr) ...
-				log.Printf("Reading email body (Length: %d bytes)", len(bodyStr))
-
-				// --- NEW CHECK: Identify if the sender is Garmin ---
+				// --- Identify if the sender is Garmin ---
 				isGarminEmail := strings.Contains(strings.ToLower(senderEmail), "garmin.com") || strings.Contains(strings.ToLower(senderEmail), "inreach")
-
 
 				// 1. TEST COMMAND PARSER (subject OR body)
 				// Only run this block if the email is NOT from Garmin
@@ -536,7 +621,7 @@ func handler(ctx context.Context) error {
 					}
 				} // End of !isGarminEmail block
 
-								// 2. GARMIN COMMAND PARSER
+				// 2. GARMIN COMMAND PARSER
 				if bodyStr == "" {
 					log.Println("Garmin parser: Body section is empty, skipping.")
 					markSeen(msg.SeqNum)
@@ -546,14 +631,14 @@ func handler(ctx context.Context) error {
 				garminDirty := false
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
-					
+
 				// Check for Garmin inReach Shortlink
-				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9_]+`) // Added _ to regex for safety based on your example URL
+				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9_]+`)
 				shortlink := linkRegex.FindString(bodyStr)
-				
+
 				if shortlink != "" {
 					log.Printf("Extracted inReach Link: %s", shortlink)
-					
+
 					// --- Extract Coordinates from Email Body ---
 					// Matches: "Lat -44.578335 Lon 169.628649"
 					latLonRegex := regexp.MustCompile(`Lat\s*([-\d.]+)\s*Lon\s*([-\d.]+)`)
@@ -562,7 +647,7 @@ func handler(ctx context.Context) error {
 					if len(coordMatch) == 3 {
 						newLat, _ := strconv.ParseFloat(coordMatch[1], 64)
 						newLon, _ := strconv.ParseFloat(coordMatch[2], 64)
-						
+
 						newPark := forecast.GetClosestPark(newLat, newLon)
 						locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
 
@@ -570,13 +655,13 @@ func handler(ctx context.Context) error {
 						state.Lon = newLon
 						state.Park = newPark
 						state.Alt = forecast.GetElevation(newLat, newLon)
-						
+
 						log.Printf("Parsed Coordinates from Email: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
 					} else {
 						log.Println("No coordinates found in the plain text email body.")
 						logRequest(db, "garmin", state.ExtID, "No-coord-in-email", 0.0, 0.0, "none")
 					}
-					
+
 					// Establish the security session for the reply by following the shortlink
 					session, err := InitGarminSession(shortlink)
 					if err != nil {
@@ -584,7 +669,7 @@ func handler(ctx context.Context) error {
 					} else {
 						activeSession = session
 						garminDirty = true
-						
+
 						// Save the ExtID and GUID to Turso for routine cron broadcasts
 						state.ExtID = session.ExtID
 						state.GUID = session.Guid
@@ -595,7 +680,6 @@ func handler(ctx context.Context) error {
 				}
 
 				upperBody := strings.ToUpper(bodyStr)
-                // ... (The START / STOP / UPDATE logic continues directly below this) ...
 
 				if strings.Contains(upperBody, "START") {
 					state.Active = true
@@ -607,7 +691,7 @@ func handler(ctx context.Context) error {
 					garminDirty = true
 					log.Println("Action: STOP tracking.")
 					logRequest(db, "garmin", state.ExtID, "STOP", state.Lat, state.Lon, state.Park)
-					
+
 					if activeSession != nil {
 						_ = SendGarminReply(activeSession, "Server: Updates Paused.")
 					}
@@ -634,9 +718,9 @@ func handler(ctx context.Context) error {
 							cmd = "UPDATE"
 						}
 						logRequest(db, "garmin", state.ExtID, cmd, state.Lat, state.Lon, state.Park)
-						
+
 						finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
-						
+
 						if activeSession != nil {
 							err := SendGarminReply(activeSession, finalMsg)
 							if err != nil {
@@ -656,7 +740,7 @@ func handler(ctx context.Context) error {
 						log.Printf("Failed to save session state to Turso: %v", err)
 					}
 				}
-				
+
 				// Ensure the email is marked as seen so the loop doesn't re-process it infinitely
 				markSeen(msg.SeqNum)
 			}
@@ -667,7 +751,7 @@ func handler(ctx context.Context) error {
 		log.Println("IMAP: INBOX is empty.")
 	}
 
-		// 4. ROUTINE BROADCAST CHECK (07:00 / 19:00 NZ wall time)
+	// 4. ROUTINE BROADCAST CHECK (07:00 / 19:00 NZ wall time)
 	loc, tzErr := time.LoadLocation("Pacific/Auckland")
 	if tzErr != nil {
 		log.Printf("Failed to load Pacific/Auckland timezone: %v", tzErr)
@@ -680,7 +764,7 @@ func handler(ctx context.Context) error {
 
 			logRequest(db, "garmin", state.ExtID, "ROUTINE", state.Lat, state.Lon, state.Park)
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
-			
+
 			// Establish a fresh Garmin Session using the Turso-stored credentials
 			routineSession, err := InitGarminSessionFromState(state.ExtID, state.GUID)
 			if err != nil {
