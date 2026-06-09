@@ -88,6 +88,23 @@ func postToGarmin(partNum int, msg, extId, guid string) {
 		return
 	}
 
+// Extracting coordinates 
+// Example: Using regex to find the coordinates in the raw HTML string
+htmlContent := doc.Text() 
+latLonRegex := regexp.MustCompile(`"Latitude":\s*(-?\d+\.\d+),\s*"Longitude":\s*(-?\d+\.\d+)`)
+matches := latLonRegex.FindStringSubmatch(htmlContent)
+
+if len(matches) == 3 {
+    latitude := matches[1]
+    longitude := matches[2]
+    log.Printf("Extracted coordinates: %s, %s\n", latitude, longitude)
+    
+    // Pass these coordinates to your MetService API integration
+} else {
+    log.Println("Could not parse coordinates. The device may not have had a GPS lock.")
+ return
+}
+
 	// 4. Build the POST payload, now including the vital security token
 	data := url.Values{}
 	data.Set("__RequestVerificationToken", token)
@@ -125,7 +142,7 @@ func postToGarmin(partNum int, msg, extId, guid string) {
 	}
 }
 
-func sendToGarmin_old(msg, extId, guid string) {
+func sendToGarmin(msg, extId, guid string) {
 	// Dry-run mode: email the full (unsplit) report instead of POSTing to Garmin.
 	// Set GARMIN_DRY_RUN=1 and optionally GARMIN_DRY_RUN_REPLY_TO=<address>.
 	if os.Getenv("GARMIN_DRY_RUN") == "1" {
@@ -166,7 +183,7 @@ func splitForGarmin(msg string) []string {
 	return []string{msg[:cut], strings.TrimSpace(msg[cut:])}
 }
 
-func postToGarmin(partNum int, msg, extId, guid string) {
+func postToGarmin_old(partNum int, msg, extId, guid string) {
 	data := url.Values{}
 	data.Set("Message", msg)
 	data.Set("extId", extId)
@@ -604,6 +621,7 @@ func handler(ctx context.Context) error {
 
 					if state.Lat == 0 && state.Lon == 0 {
 						log.Println("Cannot fetch weather: no coordinates available.")
+logRequest(db, "garmin", state.ExtID, No-coord-failed-update, 0.0, 0.0, 0)
 					} else {
 						cmd := "AUTO"
 						if isUpdateCmd {
