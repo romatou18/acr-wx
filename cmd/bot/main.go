@@ -111,46 +111,53 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	}, nil
 }
 
-// Phase 2: Post the message back using the active session
+// Phase 2: Post the message chunks back using the active session
 func SendGarminReply(session *GarminSession, message string) error {
 	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
-	
-	// Garmin requires the Referer header to match the page the form was on
 	refererURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", session.ExtID, session.Guid)
 
-	// Build the exact form payload Garmin expects
+	// Pre-build the base form payload
 	data := url.Values{}
 	data.Set("__RequestVerificationToken", session.Token)
 	data.Set("extId", session.ExtID)
 	data.Set("guid", session.Guid)
-	data.Set("Message", message)
-	
-	// Optional: Garmin sometimes expects a ReplyAddress field depending on the device generation
-	botEmail := os.Getenv("EMAIL_USER") 
-	if botEmail != "" {
-		data.Set("ReplyAddress", botEmail)
-	}
 
-	postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
-	if err != nil {
-		return fmt.Errorf("failed to build POST request: %v", err)
-	}
+	chunks := splitForGarmin(message)
 
-	// Crucial Headers for Form Submission
-	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-	postReq.Header.Set("Referer", refererURL)
-	postReq.Header.Set("Origin", "https://explore.garmin.com")
+	for partNum, chunk := range chunks {
+		// Update the payload with the current chunk
+		data.Set("Message", chunk)
 
-	// Execute using the same client (and therefore the same cookies) generated in Phase 1
-	resp, err := session.Client.Do(postReq)
-	if err != nil {
-		return fmt.Errorf("failed to execute POST: %v", err)
-	}
-	defer resp.Body.Close()
+		postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+		if err != nil {
+			log.Printf("❌ Failed to build POST request for part %d: %v", partNum+1, err)
+			continue
+		}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
-		return fmt.Errorf("garmin server rejected message. HTTP Status: %d", resp.StatusCode)
+		// Crucial Headers for Form Submission (WAF Bypass)
+		postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+		postReq.Header.Set("Referer", refererURL)
+		postReq.Header.Set("Origin", "https://explore.garmin.com")
+
+		// Execute using the same client (and cookies) generated in Phase 1
+		resp, err := session.Client.Do(postReq)
+		if err != nil {
+			return fmt.Errorf("failed to execute POST for part %d: %v", partNum+1, err)
+		}
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
+			resp.Body.Close()
+			return fmt.Errorf("garmin server rejected part %d. HTTP Status: %d", partNum+1, resp.StatusCode)
+		}
+		
+		log.Printf("✅ Successfully sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
+		resp.Body.Close()
+
+		// Small delay to ensure messages aren't rate-limited and arrive in order
+		if partNum < len(chunks)-1 {
+			time.Sleep(1500 * time.Millisecond)
+		}
 	}
 
 	return nil
