@@ -224,6 +224,44 @@ func TestParseShortlinkCoords(t *testing.T) {
 	})
 }
 
+// TestParseGarminReplyFields verifies we scrape the reply target (Guid +
+// MessageId hidden inputs) from the real message page layout. Values are taken
+// from a captured aus.explore.garmin.com page.
+func TestParseGarminReplyFields(t *testing.T) {
+	page := `<form>
+	  <input data-val="true" data-val-required="The Guid field is required." id="Guid" name="Guid" type="hidden" value="08dec69f-e773-cfea-6045-bd7c58220000">
+	  <input data-val="true" data-val-number="The field MessageId must be a number." data-val-required="The MessageId field is required." id="MessageId" name="MessageId" type="hidden" value="160707281">
+	</form>`
+	guid, msgId := parseGarminReplyFields(page)
+	if guid != "08dec69f-e773-cfea-6045-bd7c58220000" {
+		t.Errorf("guid = %q", guid)
+	}
+	if msgId != "160707281" {
+		t.Errorf("messageId = %q", msgId)
+	}
+
+	if g, m := parseGarminReplyFields(`<html><body>no form here</body></html>`); g != "" || m != "" {
+		t.Errorf("missing fields should yield empty, got (%q,%q)", g, m)
+	}
+}
+
+// TestGarminSendOK verifies delivery is only confirmed on {"Success":true} —
+// a 200 with any other body (false, or an error/HTML page) is NOT a send.
+func TestGarminSendOK(t *testing.T) {
+	if !garminSendOK([]byte(`{"Success":true}`)) {
+		t.Error(`{"Success":true} must be treated as delivered`)
+	}
+	if garminSendOK([]byte(`{"Success":false}`)) {
+		t.Error(`{"Success":false} must NOT be treated as delivered`)
+	}
+	if garminSendOK([]byte(`<!DOCTYPE html><title>Error</title>`)) {
+		t.Error("an HTML error page must NOT be treated as delivered")
+	}
+	if garminSendOK([]byte(``)) {
+		t.Error("empty body must NOT be treated as delivered")
+	}
+}
+
 func TestLooksLikeGarminError(t *testing.T) {
 	if !looksLikeGarminError([]byte(`<input name="__RequestVerificationToken" value="abc">`)) {
 		t.Error("re-served verification token form should be flagged as a failure page")

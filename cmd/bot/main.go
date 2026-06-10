@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -36,6 +37,8 @@ import (
 type SessionState struct {
 	ExtID         string
 	GUID          string
+	MessageId     string // Garmin MessageId of the last inbound message (reply target)
+	Host          string // regional explore.garmin.com host, e.g. "aus.explore.garmin.com"
 	Active        bool
 	Lat           float64
 	Lon           float64
@@ -45,82 +48,141 @@ type SessionState struct {
 	LastRoutineNZ string
 }
 
-// GarminSession holds the live connection state, cookies, and tokens
-// between the extraction phase and the posting phase.
+// GarminSession holds everything needed to POST a reply back to a device via
+// the regional explore.garmin.com TextMessage API. Modern Garmin pages no
+// longer use a hidden __RequestVerificationToken form POST — the reply is a
+// plain JSON POST to /TextMessage/TxtMsg carrying the message's Guid and
+// MessageId (both scraped from hidden inputs on the message page). That
+// unguessable Guid/MessageId pair authorises the POST; no session cookie is
+// required (confirmed from a captured browser send).
 type GarminSession struct {
-	Client *http.Client
-	Token  string
-	ExtID  string
-	Guid   string
+	Client    *http.Client
+	Host      string // regional host, e.g. "aus.explore.garmin.com"
+	ExtID     string
+	Guid      string
+	MessageId string
+	ReplyURL  string // the message page URL, used as the POST Referer
 }
 
-// Phase 1: Establish the session, capture cookies, and grab the CSRF token
-func InitGarminSession(inreachURL string) (*GarminSession, error) {
-	// A CookieJar is mandatory. Garmin uses it to link your CSRF token to your session.
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{
-		Jar:     jar,
-		Timeout: 15 * time.Second,
-	}
+// inReachPage is the result of following an inreachlink.com shortlink (or a
+// reconstructed message-page URL) to the regional explore.garmin.com host.
+type inReachPage struct {
+	HTML     string
+	FinalURL string // the page we landed on (used as the POST Referer)
+	Host     string // regional host extracted from FinalURL
+	ExtID    string // extId query param from FinalURL
+}
 
-	req, err := http.NewRequest("GET", inreachURL, nil)
+// browserUA is sent on every Garmin request so we look like a normal desktop
+// browser (Garmin fronts these endpoints with an anti-bot/WAF layer).
+const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+// fetchInReachPage GETs the message page behind an inreachlink.com shortlink,
+// following the redirect to the regional explore.garmin.com host. The returned
+// page carries everything the rest of the flow needs: the sender's location
+// (Locations[] JSON) and the Guid/MessageId hidden inputs required to post a
+// reply. A shortlink appears to be single-use, so we fetch the page exactly
+// once and reuse it for both purposes.
+func fetchInReachPage(shortlink string) (*inReachPage, error) {
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
+	req, err := http.NewRequest("GET", shortlink, nil)
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", browserUA)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
-	// Spoof a standard desktop browser to avoid bot-blocking
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
-
-	log.Printf("🔗 Garmin session: GET %s", inreachURL)
+	log.Printf("🔗 Garmin session: GET %s", shortlink)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to GET inreach URL: %v", err)
 	}
 	defer resp.Body.Close()
 
-	// After the redirect, we land on explore.garmin.com. Extract the query params.
-	finalURL := resp.Request.URL
-	log.Printf("🔗 Garmin redirect landed on: %s (HTTP %d)", finalURL.String(), resp.StatusCode)
-	extId := finalURL.Query().Get("extId")
-	guid := finalURL.Query().Get("guid")
-
-	if extId == "" || guid == "" {
-		return nil, fmt.Errorf("redirected URL did not contain extId/guid: %s", finalURL.String())
+	final := resp.Request.URL
+	log.Printf("🔗 Garmin redirect landed on: %s (HTTP %d)", final.String(), resp.StatusCode)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("inreach page returned HTTP %d (%s) — shortlink may be expired/single-use",
+			resp.StatusCode, final.String())
 	}
-
-	// Parse the HTML to find the hidden CSRF token
-	doc, err := goquery.NewDocumentFromReader(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse Garmin HTML: %v", err)
+		return nil, err
 	}
-
-	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
-	if !exists {
-		return nil, fmt.Errorf("CSRF token not found in the Garmin HTML form (extId=%s) — Garmin may have changed their page or blocked the request", extId)
-	}
-
-	return &GarminSession{
-		Client: client, // The client still holds the cookies!
-		Token:  token,
-		ExtID:  extId,
-		Guid:   guid,
+	return &inReachPage{
+		HTML:     string(b),
+		FinalURL: final.String(),
+		Host:     final.Host,
+		ExtID:    final.Query().Get("extId"),
 	}, nil
 }
 
-// InitGarminSessionFromState rebuilds a live Garmin session from the extId/guid
-// tokens persisted in Turso. Used by the routine 07:00/19:00 broadcasts, where
-// no fresh inreachlink.com shortlink is available. Hitting the TxtMsg page
-// directly with the stored tokens performs the same cookie + CSRF handshake
-// as following a shortlink.
-func InitGarminSessionFromState(extID, guid string) (*GarminSession, error) {
-	if extID == "" || guid == "" {
-		return nil, fmt.Errorf("cannot init Garmin session: empty extId/guid in state")
+// parseGarminReplyFields pulls the reply target out of the message page. Garmin
+// exposes it as hidden inputs: <input name="Guid" value="..."> and
+// <input name="MessageId" value="...">.
+func parseGarminReplyFields(html string) (guid, messageId string) {
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return "", ""
 	}
-	u := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s",
-		url.QueryEscape(extID), url.QueryEscape(guid))
-	return InitGarminSession(u)
+	guid, _ = doc.Find(`input[name="Guid"]`).Attr("value")
+	messageId, _ = doc.Find(`input[name="MessageId"]`).Attr("value")
+	return strings.TrimSpace(guid), strings.TrimSpace(messageId)
+}
+
+// newGarminSessionFromPage builds a reply session from an already-fetched
+// message page. Returns an error if the page didn't carry the Guid/MessageId
+// needed to post a reply (link expired, or Garmin changed the page layout).
+func newGarminSessionFromPage(p *inReachPage) (*GarminSession, error) {
+	guid, messageId := parseGarminReplyFields(p.HTML)
+	if guid == "" || messageId == "" {
+		return nil, fmt.Errorf("reply fields not found on Garmin page (guidSet=%v msgIdSet=%v) at %s",
+			guid != "", messageId != "", p.FinalURL)
+	}
+	jar, _ := cookiejar.New(nil)
+	return &GarminSession{
+		Client:    &http.Client{Jar: jar, Timeout: 15 * time.Second},
+		Host:      p.Host,
+		ExtID:     p.ExtID,
+		Guid:      guid,
+		MessageId: messageId,
+		ReplyURL:  p.FinalURL,
+	}, nil
+}
+
+// InitGarminSession follows an inreachlink.com shortlink and builds a reply
+// session in one step. The handler fetches the page itself (to also read the
+// sender location) and calls newGarminSessionFromPage; this wrapper is kept for
+// callers/tests that only need a session from a link.
+func InitGarminSession(inreachURL string) (*GarminSession, error) {
+	p, err := fetchInReachPage(inreachURL)
+	if err != nil {
+		return nil, err
+	}
+	return newGarminSessionFromPage(p)
+}
+
+// InitGarminSessionFromState rebuilds a reply session from the tokens persisted
+// in Turso (host/extId/guid/messageId), used by the routine 07:00/19:00
+// broadcasts where no fresh inreachlink.com shortlink is available. The reply
+// POST is authorised by the Guid/MessageId pair and needs no cookies, so this
+// requires no network round-trip.
+func InitGarminSessionFromState(s SessionState) (*GarminSession, error) {
+	if s.Host == "" || s.GUID == "" || s.MessageId == "" {
+		return nil, fmt.Errorf("cannot init Garmin session: missing host/guid/messageId in state (hostSet=%v guidSet=%v msgIdSet=%v)",
+			s.Host != "", s.GUID != "", s.MessageId != "")
+	}
+	jar, _ := cookiejar.New(nil)
+	return &GarminSession{
+		Client:    &http.Client{Jar: jar, Timeout: 15 * time.Second},
+		Host:      s.Host,
+		ExtID:     s.ExtID,
+		Guid:      s.GUID,
+		MessageId: s.MessageId,
+		ReplyURL:  fmt.Sprintf("https://%s/textmessage/txtmsg?extId=%s", s.Host, url.QueryEscape(s.ExtID)),
+	}, nil
 }
 
 // ==========================================
@@ -157,92 +219,104 @@ func parseShortlinkCoords(pageHTML string) (lat, lon float64, ok bool) {
 	return 0, 0, false
 }
 
-// fetchInReachPage GETs the message page behind an inreachlink.com shortlink,
-// following the redirect to the regional explore.garmin.com host, so the
-// sender's location can be recovered when it isn't in the email body.
-func fetchInReachPage(shortlink string) (string, error) {
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
-	req, err := http.NewRequest("GET", shortlink, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+// garminReplyBody is the JSON payload posted to /TextMessage/TxtMsg, captured
+// verbatim from a real browser "Send".
+type garminReplyBody struct {
+	ReplyAddress string `json:"ReplyAddress"`
+	ReplyMessage string `json:"ReplyMessage"`
+	Guid         string `json:"Guid"`
+	MessageId    string `json:"MessageId"`
 }
 
-// Phase 2: Post the message chunks back using the active session
+// SendGarminReply posts the reply (chunked to <160 chars) back to the device via
+// the regional explore.garmin.com JSON API:
+//
+//	POST https://<host>/TextMessage/TxtMsg
+//	Content-Type: application/json   X-Requested-With: XMLHttpRequest
+//	{"ReplyAddress","ReplyMessage","Guid","MessageId"}  ->  {"Success":true}
+//
+// The Guid/MessageId pair authorises the POST; no cookies/CSRF token are needed.
 func SendGarminReply(session *GarminSession, message string) error {
-	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
-	refererURL := fmt.Sprintf("https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s", session.ExtID, session.Guid)
+	if session == nil {
+		return fmt.Errorf("no active Garmin session")
+	}
+	if session.Host == "" || session.Guid == "" || session.MessageId == "" {
+		return fmt.Errorf("incomplete Garmin session (hostSet=%v guidSet=%v msgIdSet=%v)",
+			session.Host != "", session.Guid != "", session.MessageId != "")
+	}
 
-	// Pre-build the base form payload
-	data := url.Values{}
-	data.Set("__RequestVerificationToken", session.Token)
-	data.Set("extId", session.ExtID)
-	data.Set("guid", session.Guid)
+	replyAddr := os.Getenv("EMAIL_USER") // the address the device replies to (our bot inbox)
+	postURL := fmt.Sprintf("https://%s/TextMessage/TxtMsg", session.Host)
+	origin := fmt.Sprintf("https://%s", session.Host)
+	referer := session.ReplyURL
+	if referer == "" {
+		referer = fmt.Sprintf("https://%s/textmessage/txtmsg?extId=%s", session.Host, session.ExtID)
+	}
 
 	chunks := splitForGarmin(message)
-	log.Printf("📤 Sending to Garmin: %d chars in %d part(s) [extId=%s]", len(message), len(chunks), session.ExtID)
+	log.Printf("📤 Sending to Garmin: %d chars in %d part(s) [host=%s extId=%s msgId=%s]",
+		len(message), len(chunks), session.Host, session.ExtID, session.MessageId)
 
 	for partNum, chunk := range chunks {
-		// Update the payload with the current chunk
-		data.Set("Message", chunk)
+		payload, err := json.Marshal(garminReplyBody{
+			ReplyAddress: replyAddr,
+			ReplyMessage: chunk,
+			Guid:         session.Guid,
+			MessageId:    session.MessageId,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to marshal reply part %d: %v", partNum+1, err)
+		}
 
-		postReq, err := http.NewRequest("POST", postURL, strings.NewReader(data.Encode()))
+		postReq, err := http.NewRequest("POST", postURL, bytes.NewReader(payload))
 		if err != nil {
 			log.Printf("❌ Failed to build POST request for part %d: %v", partNum+1, err)
 			continue
 		}
+		postReq.Header.Set("Content-Type", "application/json")
+		postReq.Header.Set("X-Requested-With", "XMLHttpRequest")
+		postReq.Header.Set("Accept", "*/*")
+		postReq.Header.Set("User-Agent", browserUA)
+		postReq.Header.Set("Origin", origin)
+		postReq.Header.Set("Referer", referer)
 
-		// Crucial Headers for Form Submission (WAF Bypass)
-		postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		postReq.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-		postReq.Header.Set("Referer", refererURL)
-		postReq.Header.Set("Origin", "https://explore.garmin.com")
-
-		// Execute using the same client (and cookies) generated in Phase 1
 		resp, err := session.Client.Do(postReq)
 		if err != nil {
 			return fmt.Errorf("failed to execute POST for part %d: %v", partNum+1, err)
 		}
-
-		// Read a bounded slice of the response so we can tell a genuine success
-		// from a 200-with-error-page (CSRF rejection / WAF challenge), which
-		// otherwise silently looks like a successful send.
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
 		log.Printf("📨 Garmin POST part %d/%d → HTTP %d (%d bytes resp)", partNum+1, len(chunks), resp.StatusCode, len(respBody))
 
-		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
+		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("garmin server rejected part %d. HTTP Status: %d, body: %s", partNum+1, resp.StatusCode, snippet(respBody))
 		}
-
-		// 200/302 but the body hints at a failure page — surface it loudly.
-		if looksLikeGarminError(respBody) {
-			log.Printf("⚠️ Garmin returned HTTP %d for part %d but the response looks like an error/challenge page — the message may NOT have been delivered. Snippet: %s",
-				resp.StatusCode, partNum+1, snippet(respBody))
-		} else {
-			log.Printf("✅ Sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
+		// A 200 is NOT proof of delivery — Garmin returns {"Success":true} on a
+		// genuine send and an error page / {"Success":false} otherwise.
+		if !garminSendOK(respBody) {
+			return fmt.Errorf("garmin did not confirm delivery of part %d (no \"Success\":true). body: %s", partNum+1, snippet(respBody))
 		}
+		log.Printf("✅ Sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
 
-		// Small delay to ensure messages aren't rate-limited and arrive in order
+		// Small delay so multi-part messages aren't rate-limited and arrive in order.
 		if partNum < len(chunks)-1 {
 			time.Sleep(1500 * time.Millisecond)
 		}
 	}
 
 	return nil
+}
+
+// garminSendOK reports whether the TxtMsg JSON response confirmed delivery
+// ({"Success":true}). Anything else (false, an error/HTML page) is a failure.
+func garminSendOK(b []byte) bool {
+	var r struct {
+		Success bool `json:"Success"`
+	}
+	if err := json.Unmarshal(b, &r); err != nil {
+		return false
+	}
+	return r.Success
 }
 
 // snippet returns a single-line, length-capped preview of a response body for logs.
@@ -520,9 +594,16 @@ func ensureSchema(db *sql.DB) error {
 		return fmt.Errorf("create table: %w", err)
 	}
 
-	_, err = db.Exec(`ALTER TABLE session_state ADD COLUMN last_routine_nz TEXT NOT NULL DEFAULT ''`)
-	if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
-		return fmt.Errorf("alter table: %w", err)
+	// Idempotent column additions for DBs created before these fields existed.
+	for _, col := range []string{
+		`ALTER TABLE session_state ADD COLUMN last_routine_nz TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_state ADD COLUMN message_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_state ADD COLUMN reply_host TEXT NOT NULL DEFAULT ''`,
+	} {
+		_, err = db.Exec(col)
+		if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
+			return fmt.Errorf("alter table: %w", err)
+		}
 	}
 
 	_, err = db.Exec(`
@@ -575,13 +656,15 @@ func loadState(db *sql.DB) (SessionState, error) {
 	var s SessionState
 	var activeInt int
 	err := db.QueryRow(
-		`SELECT ext_id, guid, active, lat, lon, alt, park, last_fetch, IFNULL(last_routine_nz,'') FROM session_state WHERE id='garmin_primary'`,
-	).Scan(&s.ExtID, &s.GUID, &activeInt, &s.Lat, &s.Lon, &s.Alt, &s.Park, &s.LastFetch, &s.LastRoutineNZ)
-	if err != nil && strings.Contains(err.Error(), "last_routine") {
+		`SELECT ext_id, guid, active, lat, lon, alt, park, last_fetch, IFNULL(last_routine_nz,''), IFNULL(message_id,''), IFNULL(reply_host,'') FROM session_state WHERE id='garmin_primary'`,
+	).Scan(&s.ExtID, &s.GUID, &activeInt, &s.Lat, &s.Lon, &s.Alt, &s.Park, &s.LastFetch, &s.LastRoutineNZ, &s.MessageId, &s.Host)
+	if err != nil && (strings.Contains(err.Error(), "last_routine") || strings.Contains(err.Error(), "message_id") || strings.Contains(err.Error(), "reply_host")) {
 		err = db.QueryRow(
 			`SELECT ext_id, guid, active, lat, lon, alt, park, last_fetch FROM session_state WHERE id='garmin_primary'`,
 		).Scan(&s.ExtID, &s.GUID, &activeInt, &s.Lat, &s.Lon, &s.Alt, &s.Park, &s.LastFetch)
 		s.LastRoutineNZ = ""
+		s.MessageId = ""
+		s.Host = ""
 	}
 	s.Active = activeInt == 1
 	return s, err
@@ -593,15 +676,16 @@ func saveState(db *sql.DB, s SessionState) error {
 		activeInt = 1
 	}
 	_, err := db.Exec(
-		`INSERT INTO session_state (id, ext_id, guid, active, lat, lon, alt, park, last_fetch, last_routine_nz)
-		 VALUES ('garmin_primary', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO session_state (id, ext_id, guid, active, lat, lon, alt, park, last_fetch, last_routine_nz, message_id, reply_host)
+		 VALUES ('garmin_primary', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   ext_id=excluded.ext_id, guid=excluded.guid, active=excluded.active,
 		   lat=excluded.lat, lon=excluded.lon, alt=excluded.alt, park=excluded.park,
-		   last_fetch=excluded.last_fetch, last_routine_nz=excluded.last_routine_nz`,
-		s.ExtID, s.GUID, activeInt, s.Lat, s.Lon, s.Alt, s.Park, s.LastFetch, s.LastRoutineNZ,
+		   last_fetch=excluded.last_fetch, last_routine_nz=excluded.last_routine_nz,
+		   message_id=excluded.message_id, reply_host=excluded.reply_host`,
+		s.ExtID, s.GUID, activeInt, s.Lat, s.Lon, s.Alt, s.Park, s.LastFetch, s.LastRoutineNZ, s.MessageId, s.Host,
 	)
-	if err != nil && strings.Contains(err.Error(), "last_routine") {
+	if err != nil && (strings.Contains(err.Error(), "last_routine") || strings.Contains(err.Error(), "message_id") || strings.Contains(err.Error(), "reply_host")) {
 		_, err = db.Exec(
 			`INSERT INTO session_state (id, ext_id, guid, active, lat, lon, alt, park, last_fetch)
 			 VALUES ('garmin_primary', ?, ?, ?, ?, ?, ?, ?, ?)
@@ -966,15 +1050,28 @@ func handler(ctx context.Context) error {
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
 
+				// --- Fetch the inReach message page once (a shortlink appears to
+				//     be single-use): it carries BOTH the sender's location and the
+				//     Guid/MessageId needed to post the reply. ---
+				var page *inReachPage
+				if gc.Shortlink != "" {
+					log.Printf("🔗 Extracted inReach shortlink: %s", gc.Shortlink)
+					if p, ferr := fetchInReachPage(gc.Shortlink); ferr != nil {
+						log.Printf("🔗 Failed to fetch inReach page: %v", ferr)
+					} else {
+						page = p
+						log.Printf("🔗 inReach page: host=%s extId=%s (%d bytes)", p.Host, p.ExtID, len(p.HTML))
+					}
+				} else {
+					log.Println("🔗 No inreachlink.com shortlink in email.")
+				}
+
 				// --- Coordinates: from the email body if present, else recovered
-				//     from the shortlink page (Messenger/app messages omit the
-				//     body stamp but the page carries a Locations[] JSON block). ---
+				//     from the page (Messenger/app messages omit the body stamp but
+				//     the page carries a Locations[] JSON block). ---
 				lat, lon, haveCoords := gc.Lat, gc.Lon, gc.HasCoords
-				if !haveCoords && gc.Shortlink != "" {
-					log.Println("📍 No coords in email body — querying the shortlink for the sender's location…")
-					if page, ferr := fetchInReachPage(gc.Shortlink); ferr != nil {
-						log.Printf("📍 Shortlink location fetch failed: %v", ferr)
-					} else if la, lo, ok := parseShortlinkCoords(page); ok {
+				if !haveCoords && page != nil {
+					if la, lo, ok := parseShortlinkCoords(page.HTML); ok {
 						lat, lon, haveCoords = la, lo, true
 						log.Printf("📍 Recovered coordinates from shortlink page: Lat=%f Lon=%f", lat, lon)
 					} else {
@@ -992,25 +1089,24 @@ func handler(ctx context.Context) error {
 						state.Lat, state.Lon, state.Park, state.Alt, locationChanged)
 				} else {
 					log.Println("📍 No coordinates available (body or shortlink) — using last-known location.")
+					if gc.Shortlink == "" && !gc.HasCoords {
+						logRequest(db, "garmin", "no link", "update no link found in email", 0.0, 0.0, "no park")
+					}
 				}
 
-				// --- Establish reply session from the inReach shortlink ---
-				if gc.Shortlink != "" {
-					log.Printf("🔗 Extracted inReach shortlink: %s", gc.Shortlink)
-					session, err := InitGarminSession(gc.Shortlink)
-					if err != nil {
-						log.Printf("❌ Failed to init Garmin session: %v", err)
+				// --- Establish the reply session from the same page. ---
+				if page != nil {
+					if session, serr := newGarminSessionFromPage(page); serr != nil {
+						log.Printf("❌ Failed to init Garmin session: %v", serr)
 					} else {
 						activeSession = session
 						garminDirty = true
 						state.ExtID = session.ExtID
 						state.GUID = session.Guid
-						log.Printf("✅ Garmin session established (extId=%s, token len=%d)", session.ExtID, len(session.Token))
-					}
-				} else {
-					log.Println("🔗 No inreachlink.com shortlink in email.")
-					if !gc.HasCoords {
-						logRequest(db, "garmin", "no link", "update no link found in email", 0.0, 0.0, "no park")
+						state.MessageId = session.MessageId
+						state.Host = session.Host
+						log.Printf("✅ Garmin session established (host=%s extId=%s msgId=%s)",
+							session.Host, session.ExtID, session.MessageId)
 					}
 				}
 
@@ -1105,7 +1201,7 @@ func handler(ctx context.Context) error {
 			// (skipped in dry-run, where sendToGarmin emails the payload instead).
 			var routineSession *GarminSession
 			if os.Getenv("GARMIN_DRY_RUN") != "1" {
-				routineSession, err = InitGarminSessionFromState(state.ExtID, state.GUID)
+				routineSession, err = InitGarminSessionFromState(state)
 				if err != nil {
 					log.Printf("❌ Failed to init routine Garmin session: %v", err)
 					routineSession = nil

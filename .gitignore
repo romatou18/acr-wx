@@ -7,3 +7,6 @@
 
 # Captured Garmin email samples (scratch inputs, not part of the app)
 /*.html
+
+# HAR captures — contain session cookies/tokens, never commit
+/*.har
