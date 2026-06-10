@@ -26,7 +26,11 @@
   to   = "/.netlify/functions/weather-api/log"
   status = 200
 
+# force = true so /debug always routes to the function. Without it Netlify's
+# pretty-URL matching serves the static public/debug.html for /debug and skips
+# this rewrite. The viewer page itself lives at the distinct path /debug.html.
 [[redirects]]
   from = "/debug"
   to   = "/.netlify/functions/weather-api/debug"
   status = 200
+  force = true
