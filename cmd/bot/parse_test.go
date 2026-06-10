@@ -192,6 +192,38 @@ func TestUserMessageStripsBoilerplate(t *testing.T) {
 	}
 }
 
+// TestParseShortlinkCoords covers recovering the sender's location from the
+// inReach message page (the shortlink target) when the email body has no
+// coordinates. JSON shapes are taken from real captured pages.
+func TestParseShortlinkCoords(t *testing.T) {
+	t.Run("device GPS message has real coords in Locations[]", func(t *testing.T) {
+		page := `...,"FirstName":"Christchurch","LastName":"ACR 01","Locations":[{"FalseBreak":null,"Latitude":-44.9884567260742,"Longitude":168.904968261719,"Altitude":1234}]...`
+		lat, lon, ok := parseShortlinkCoords(page)
+		if !ok {
+			t.Fatal("expected coords, got none")
+		}
+		if lat > -44.98 || lat < -44.99 || lon < 168.90 || lon > 168.91 {
+			t.Errorf("coords out of expected range: (%v, %v)", lat, lon)
+		}
+	})
+
+	t.Run("app message with no GPS reports 0,0 -> no fix", func(t *testing.T) {
+		page := `..."Latitude":0,"Longitude":0,...,"Latitude":0,"Longitude":0...`
+		if _, _, ok := parseShortlinkCoords(page); ok {
+			t.Error("0,0 must be treated as no fix")
+		}
+	})
+
+	t.Run("default map noise is ignored, real fix wins", func(t *testing.T) {
+		// page also contains default map center as 'lat : 42' (different format) and 0,0 owner loc
+		page := `lat : 42, lon : -73 ... "Latitude":0,"Longitude":0 ... "Latitude":-43.5310,"Longitude":170.1420 ...`
+		lat, lon, ok := parseShortlinkCoords(page)
+		if !ok || lat != -43.5310 || lon != 170.1420 {
+			t.Errorf("expected (-43.5310,170.1420), got ok=%v (%v,%v)", ok, lat, lon)
+		}
+	})
+}
+
 func TestLooksLikeGarminError(t *testing.T) {
 	if !looksLikeGarminError([]byte(`<input name="__RequestVerificationToken" value="abc">`)) {
 		t.Error("re-served verification token form should be flagged as a failure page")

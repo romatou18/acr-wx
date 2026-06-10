@@ -123,6 +123,64 @@ func InitGarminSessionFromState(extID, guid string) (*GarminSession, error) {
 	return InitGarminSession(u)
 }
 
+// ==========================================
+// SHORTLINK LOCATION FALLBACK
+// ==========================================
+//
+// Messages composed in the Garmin Messenger / Explore app (relayed over
+// Bluetooth) often omit the "Lat .. Lon .." stamp from the email body — only
+// messages sent directly from the inReach with a GPS fix include it. The
+// sender's location is, however, embedded in the message page behind the
+// inreachlink.com shortlink as JSON:
+//   "Locations":[{ ... "Latitude":<lat>,"Longitude":<lon> ... }]
+// When the email body has no coordinates we follow the shortlink and recover
+// them here. Messages sent with no GPS fix report 0,0 and yield ok=false.
+var reShortlinkLatLon = regexp.MustCompile(`"Latitude":\s*(-?\d+(?:\.\d+)?)\s*,\s*"Longitude":\s*(-?\d+(?:\.\d+)?)`)
+
+// parseShortlinkCoords returns the first valid, non-zero coordinate pair found
+// in the inReach message page HTML. ok=false means no usable fix was present.
+func parseShortlinkCoords(pageHTML string) (lat, lon float64, ok bool) {
+	for _, m := range reShortlinkLatLon.FindAllStringSubmatch(pageHTML, -1) {
+		la, e1 := strconv.ParseFloat(m[1], 64)
+		lo, e2 := strconv.ParseFloat(m[2], 64)
+		if e1 != nil || e2 != nil {
+			continue
+		}
+		if la == 0 && lo == 0 {
+			continue // no GPS fix
+		}
+		if la < -90 || la > 90 || lo < -180 || lo > 180 {
+			continue
+		}
+		return la, lo, true
+	}
+	return 0, 0, false
+}
+
+// fetchInReachPage GETs the message page behind an inreachlink.com shortlink,
+// following the redirect to the regional explore.garmin.com host, so the
+// sender's location can be recovered when it isn't in the email body.
+func fetchInReachPage(shortlink string) (string, error) {
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
+	req, err := http.NewRequest("GET", shortlink, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 // Phase 2: Post the message chunks back using the active session
 func SendGarminReply(session *GarminSession, message string) error {
 	postURL := "https://explore.garmin.com/TextMessage/TxtMsg"
@@ -908,18 +966,32 @@ func handler(ctx context.Context) error {
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
 
-				// --- Coordinates (parsed regardless of shortlink presence) ---
-				if gc.HasCoords {
-					newPark := forecast.GetClosestPark(gc.Lat, gc.Lon)
-					locationChanged = (newPark != state.Park) || (gc.Lat != state.Lat) || (gc.Lon != state.Lon)
-					state.Lat = gc.Lat
-					state.Lon = gc.Lon
+				// --- Coordinates: from the email body if present, else recovered
+				//     from the shortlink page (Messenger/app messages omit the
+				//     body stamp but the page carries a Locations[] JSON block). ---
+				lat, lon, haveCoords := gc.Lat, gc.Lon, gc.HasCoords
+				if !haveCoords && gc.Shortlink != "" {
+					log.Println("📍 No coords in email body — querying the shortlink for the sender's location…")
+					if page, ferr := fetchInReachPage(gc.Shortlink); ferr != nil {
+						log.Printf("📍 Shortlink location fetch failed: %v", ferr)
+					} else if la, lo, ok := parseShortlinkCoords(page); ok {
+						lat, lon, haveCoords = la, lo, true
+						log.Printf("📍 Recovered coordinates from shortlink page: Lat=%f Lon=%f", lat, lon)
+					} else {
+						log.Println("📍 Shortlink page had no GPS fix (0,0) — message was sent without location.")
+					}
+				}
+				if haveCoords {
+					newPark := forecast.GetClosestPark(lat, lon)
+					locationChanged = (newPark != state.Park) || (lat != state.Lat) || (lon != state.Lon)
+					state.Lat = lat
+					state.Lon = lon
 					state.Park = newPark
-					state.Alt = forecast.GetElevation(gc.Lat, gc.Lon)
-					log.Printf("📍 Parsed coordinates: Lat=%f Lon=%f Park=%s Alt=%d (changed=%v)",
+					state.Alt = forecast.GetElevation(lat, lon)
+					log.Printf("📍 Coordinates: Lat=%f Lon=%f Park=%s Alt=%d (changed=%v)",
 						state.Lat, state.Lon, state.Park, state.Alt, locationChanged)
 				} else {
-					log.Println("📍 No coordinates found in the email body.")
+					log.Println("📍 No coordinates available (body or shortlink) — using last-known location.")
 				}
 
 				// --- Establish reply session from the inReach shortlink ---
