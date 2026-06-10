@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACR Alpine Weather — Live Debug Logs</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #4f8ef7;
+      --accent-dim: #1e3a6e;
+      --green: #3ecf8e;
+      --yellow: #f6c90e;
+      --red: #e05c5c;
+      --text: #e2e4ed;
+      --muted: #8b90a8;
+      --code-bg: #12141c;
+      --radius: 10px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    /* Top bar */
+    header {
+      flex: 0 0 auto;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+      padding: .7rem 1rem;
+      display: flex;
+      align-items: center;
+      gap: .9rem;
+      flex-wrap: wrap;
+    }
+    header h1 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.01em;
+      white-space: nowrap;
+    }
+    header h1 span { color: var(--accent); }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: .4rem;
+      font-size: .8rem;
+      color: var(--muted);
+    }
+    .dot {
+      width: .65rem; height: .65rem; border-radius: 50%;
+      background: var(--muted); transition: background .2s;
+    }
+    .dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+    .dot.paused { background: var(--yellow); }
+    .dot.err { background: var(--red); }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+
+    .spacer { flex: 1 1 auto; }
+
+    .controls { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+    button, .levels label, input {
+      font-family: inherit;
+      font-size: .8rem;
+    }
+    button {
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: .4rem .7rem;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+    }
+    button:hover { border-color: var(--accent); }
+    button.active { background: var(--accent-dim); border-color: var(--accent); color: #fff; }
+
+    input[type="text"], input[type="password"], input[type="search"] {
+      background: var(--code-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      padding: .4rem .6rem;
+      min-width: 130px;
+    }
+    input:focus { outline: none; border-color: var(--accent); }
+
+    .levels { display: inline-flex; gap: .35rem; }
+    .levels label {
+      display: inline-flex; align-items: center; gap: .3rem;
+      padding: .3rem .55rem;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      cursor: pointer;
+      user-select: none;
+      color: var(--muted);
+    }
+    .levels label.on { color: var(--text); border-color: var(--accent); }
+    .levels input { display: none; }
+    .lv-dot { width:.55rem; height:.55rem; border-radius:50%; display:inline-block; }
+    .lv-info    .lv-dot { background: var(--accent); }
+    .lv-success .lv-dot { background: var(--green); }
+    .lv-warn    .lv-dot { background: var(--yellow); }
+    .lv-error   .lv-dot { background: var(--red); }
+
+    /* Log area */
+    main {
+      flex: 1 1 auto;
+      overflow-y: auto;
+      padding: .6rem 0 2rem;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+      font-size: .82rem;
+      line-height: 1.55;
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 86px 56px 1fr;
+      gap: .75rem;
+      padding: .12rem 1rem;
+      border-left: 3px solid transparent;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .row:hover { background: rgba(255,255,255,0.03); }
+    .row .time { color: var(--muted); }
+    .row .run  { color: var(--muted); opacity: .8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .row .msg  { color: var(--text); }
+    .row.info    { border-left-color: var(--accent-dim); }
+    .row.success { border-left-color: var(--green); }
+    .row.success .msg { color: var(--green); }
+    .row.warn    { border-left-color: var(--yellow); }
+    .row.warn .msg { color: var(--yellow); }
+    .row.error   { border-left-color: var(--red); background: rgba(224,92,92,.06); }
+    .row.error .msg { color: var(--red); }
+    /* New-run separator */
+    .run-sep {
+      padding: .35rem 1rem .15rem;
+      color: var(--muted);
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      border-top: 1px dashed var(--border);
+      margin-top: .25rem;
+    }
+    .empty { color: var(--muted); padding: 2rem 1rem; text-align: center; }
+
+    footer {
+      flex: 0 0 auto;
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      padding: .4rem 1rem;
+      font-size: .72rem;
+      color: var(--muted);
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    footer a { color: var(--accent); text-decoration: none; }
+    .count { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ACR <span>Debug Logs</span></h1>
+    <span class="status"><span id="dot" class="dot"></span><span id="statusText">connecting…</span></span>
+    <div class="spacer"></div>
+    <div class="controls">
+      <input type="search" id="filter" placeholder="filter text…" autocomplete="off">
+      <div class="levels" id="levels">
+        <label class="lv-info on"    data-lvl="info"><input type="checkbox" checked><span class="lv-dot"></span>info</label>
+        <label class="lv-success on" data-lvl="success"><input type="checkbox" checked><span class="lv-dot"></span>ok</label>
+        <label class="lv-warn on"    data-lvl="warn"><input type="checkbox" checked><span class="lv-dot"></span>warn</label>
+        <label class="lv-error on"   data-lvl="error"><input type="checkbox" checked><span class="lv-dot"></span>error</label>
+      </div>
+      <button id="pauseBtn" title="Pause / resume live updates">⏸ Pause</button>
+      <button id="wrapBtn" class="active" title="Toggle auto-scroll to newest">⤓ Auto-scroll</button>
+      <button id="clearBtn" title="Clear the view (does not delete server logs)">Clear</button>
+    </div>
+  </header>
+
+  <main id="log"><div class="empty" id="emptyMsg">Waiting for logs…</div></main>
+
+  <footer>
+    <span class="count"><span id="count">0</span> lines</span>
+    <span>poll <span id="interval">2s</span></span>
+    <span id="keyState"></span>
+    <div class="spacer" style="flex:1"></div>
+    <a href="/index.html">← guide</a>
+    <a href="https://github.com/romatou18/acr-wx" target="_blank">github</a>
+  </footer>
+
+<script>
+(() => {
+  const qp = new URLSearchParams(location.search);
+  // API base: same-origin by default; override with ?api=http://localhost:9090 for local dev.
+  const API = (qp.get('api') || '').replace(/\/$/, '');
+  const KEY = qp.get('key') || '';
+  const POLL_MS = Math.max(1000, parseInt(qp.get('poll') || '2000', 10));
+
+  const logEl = document.getElementById('log');
+  const emptyMsg = document.getElementById('emptyMsg');
+  const dot = document.getElementById('dot');
+  const statusText = document.getElementById('statusText');
+  const countEl = document.getElementById('count');
+  const filterEl = document.getElementById('filter');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const wrapBtn = document.getElementById('wrapBtn');
+  const clearBtn = document.getElementById('clearBtn');
+  const keyState = document.getElementById('keyState');
+
+  document.getElementById('interval').textContent = (POLL_MS / 1000) + 's';
+  keyState.textContent = KEY ? '🔑 key set' : '';
+
+  let lastId = 0;
+  const seen = new Set();
+  let total = 0;
+  let lastRun = null;
+  let paused = false;
+  let autoScroll = true;
+  let activeLevels = new Set(['info', 'success', 'warn', 'error']);
+  let filterText = '';
+
+  // Classify a log line into a severity level from its emoji / wording.
+  function classify(msg) {
+    if (/❌|⛔|\bfatal\b|\bpanic\b|failed|✗|rejected|unauthorized|error:/i.test(msg)) return 'error';
+    if (/⚠️|\bwarn|may not|no active|no coordinates|skipping|leaving message/i.test(msg)) return 'warn';
+    if (/✅|🚀|🌅|established|successfully|sent to garmin|dry run/i.test(msg)) return 'success';
+    return 'info';
+  }
+
+  function nzTime(ts) {
+    try {
+      return new Intl.DateTimeFormat('en-NZ', {
+        timeZone: 'Pacific/Auckland', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false
+      }).format(new Date(ts * 1000));
+    } catch (_) {
+      return new Date(ts * 1000).toISOString().slice(11, 19);
+    }
+  }
+
+  // Deterministic colour per run id so consecutive invocations are visually grouped.
+  function runColor(run) {
+    let h = 0;
+    for (let i = 0; i < run.length; i++) h = (h * 31 + run.charCodeAt(i)) >>> 0;
+    return `hsl(${h % 360}, 45%, 62%)`;
+  }
+
+  function passesFilter(row) {
+    if (!activeLevels.has(row.dataset.lvl)) return false;
+    if (filterText && !row.dataset.text.includes(filterText)) return false;
+    return true;
+  }
+
+  function applyFilters() {
+    let visible = 0;
+    for (const row of logEl.querySelectorAll('.row')) {
+      const show = passesFilter(row);
+      row.style.display = show ? '' : 'none';
+      if (show) visible++;
+    }
+    for (const sep of logEl.querySelectorAll('.run-sep')) sep.style.display = filterText ? 'none' : '';
+    countEl.textContent = visible;
+    emptyMsg.style.display = total === 0 ? '' : 'none';
+  }
+
+  function addLine(e) {
+    if (seen.has(e.id)) return;
+    seen.add(e.id);
+    total++;
+
+    if (e.run !== lastRun) {
+      lastRun = e.run;
+      const sep = document.createElement('div');
+      sep.className = 'run-sep';
+      sep.style.color = runColor(e.run);
+      sep.textContent = '── run ' + e.run + ' @ ' + nzTime(e.ts) + ' ──';
+      logEl.appendChild(sep);
+    }
+
+    const lvl = classify(e.msg);
+    const row = document.createElement('div');
+    row.className = 'row ' + lvl;
+    row.dataset.lvl = lvl;
+    row.dataset.text = e.msg.toLowerCase();
+
+    const t = document.createElement('span'); t.className = 'time'; t.textContent = nzTime(e.ts);
+    const r = document.createElement('span'); r.className = 'run'; r.textContent = e.run.slice(-5); r.style.color = runColor(e.run);
+    const m = document.createElement('span'); m.className = 'msg'; m.textContent = e.msg;
+    row.append(t, r, m);
+
+    row.style.display = passesFilter(row) ? '' : 'none';
+    logEl.appendChild(row);
+  }
+
+  function trim() {
+    // Keep the DOM bounded (the server already caps at ~2 days of logs).
+    const MAX = 3000;
+    const rows = logEl.children;
+    while (rows.length > MAX) logEl.removeChild(rows[0]);
+  }
+
+  function setStatus(state, text) {
+    dot.className = 'dot ' + state;
+    statusText.textContent = text;
+  }
+
+  async function poll() {
+    if (paused) return;
+    const url = `${API}/debug?after=${lastId}` + (KEY ? `&key=${encodeURIComponent(KEY)}` : '');
+    try {
+      const res = await fetch(url, { cache: 'no-store' });
+      if (res.status === 401) { setStatus('err', 'unauthorized — add ?key=…'); return; }
+      if (!res.ok) { setStatus('err', 'HTTP ' + res.status); return; }
+      const data = await res.json();
+      if (Array.isArray(data) && data.length) {
+        const wasNearBottom = isNearBottom();
+        for (const e of data) {
+          addLine(e);
+          if (e.id > lastId) lastId = e.id;
+        }
+        trim();
+        applyFilters();
+        if (autoScroll && wasNearBottom) scrollToBottom();
+      }
+      setStatus('live', 'live · updated ' + nzTime(Date.now() / 1000));
+    } catch (err) {
+      setStatus('err', 'connection error');
+    }
+  }
+
+  function isNearBottom() { return logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 120; }
+  function scrollToBottom() { logEl.scrollTop = logEl.scrollHeight; }
+
+  // ── Controls ────────────────────────────────────────────────────────────
+  filterEl.addEventListener('input', () => { filterText = filterEl.value.trim().toLowerCase(); applyFilters(); });
+
+  document.getElementById('levels').addEventListener('click', (ev) => {
+    const label = ev.target.closest('label'); if (!label) return;
+    const lvl = label.dataset.lvl;
+    setTimeout(() => {
+      const cb = label.querySelector('input');
+      if (cb.checked) { activeLevels.add(lvl); label.classList.add('on'); }
+      else { activeLevels.delete(lvl); label.classList.remove('on'); }
+      applyFilters();
+    }, 0);
+  });
+
+  pauseBtn.addEventListener('click', () => {
+    paused = !paused;
+    pauseBtn.textContent = paused ? '▶ Resume' : '⏸ Pause';
+    pauseBtn.classList.toggle('active', paused);
+    if (paused) setStatus('paused', 'paused');
+    else poll();
+  });
+
+  wrapBtn.addEventListener('click', () => {
+    autoScroll = !autoScroll;
+    wrapBtn.classList.toggle('active', autoScroll);
+    if (autoScroll) scrollToBottom();
+  });
+
+  clearBtn.addEventListener('click', () => {
+    logEl.innerHTML = '<div class="empty" id="emptyMsg">Cleared. New lines will appear here…</div>';
+    // Note: this clears the view only. Server keeps its rolling log.
+  });
+
+  setStatus('', 'connecting…');
+  poll();
+  setInterval(poll, POLL_MS);
+})();
+</script>
+</body>
+</html>

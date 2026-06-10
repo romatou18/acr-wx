@@ -70,3 +70,38 @@ You don't need to burn expensive Garmin satellite credits to test the bot. The a
    ./scripts/build.sh
    export $(grep -v '^#' .env | xargs) && LOCAL_WEATHER_BOT=1 ./functions/weather-bot
    ```
+
+---
+
+## 🔬 Live Debug Logs & Tracing
+
+Because the bot runs as a short-lived serverless function, you can't tail its stdout. Instead, every `log.*` line from each invocation is captured and persisted to a `debug_log` table in Turso, then streamed to a live web viewer.
+
+* **Live viewer:** open **`/debug.html`** (e.g. `https://<your-site>/debug.html?key=<LOGS_KEY>`). It polls `/debug` every 2 s and renders a colour-coded, auto-scrolling, filterable log stream grouped by invocation. Levels (info / ok / warn / error) are inferred from the line.
+* **JSON API:** `GET /debug?after=<id>&key=<LOGS_KEY>` returns log rows as JSON for incremental polling.
+* **Auth:** set the `LOGS_KEY` env var to require `?key=` on both `/log` and `/debug` (leave unset for open access).
+* **Retention:** the bot prunes `debug_log` rows older than 2 days on each run.
+
+The pipeline is now traced end-to-end: sender routing, command/coordinate parsing, Garmin session handshake (redirect URL, CSRF token), and — crucially — the **Garmin POST response body**, so a `200`-with-error-page (CSRF/WAF rejection) is flagged instead of silently logged as "✅ sent".
+
+### Dry-run mode (test the full path without a device)
+
+Set `GARMIN_DRY_RUN=1` to exercise the entire receive → parse → build → send pipeline **without** POSTing to Garmin or burning satellite credits. Instead of hitting `explore.garmin.com`, the bot emails the exact payload it *would* have sent to `GARMIN_DRY_RUN_REPLY_TO` (falling back to `EMAIL_USER`):
+
+```bash
+export $(grep -v '^#' .env | xargs)
+GARMIN_DRY_RUN=1 GARMIN_DRY_RUN_REPLY_TO=you@example.com LOCAL_WEATHER_BOT=1 ./functions/weather-bot
+```
+
+### Fast unit tests (no network / no IMAP)
+
+```bash
+go test ./cmd/bot/        # parsing + routing decision logic (parse_test.go)
+go test -tags integration ./cmd/bot/   # full live email loop (needs Gmail + Turso creds)
+```
+
+### Local log viewer
+
+```bash
+LOCAL_WEATHER_API=1 ./functions/weather-api   # serves :9090 + public/ → http://localhost:9090/debug.html
+```

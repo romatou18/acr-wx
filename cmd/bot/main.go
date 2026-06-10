@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	_ "time/tzdata"
@@ -72,6 +73,7 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.5")
 
+	log.Printf("🔗 Garmin session: GET %s", inreachURL)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to GET inreach URL: %v", err)
@@ -80,6 +82,7 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 
 	// After the redirect, we land on explore.garmin.com. Extract the query params.
 	finalURL := resp.Request.URL
+	log.Printf("🔗 Garmin redirect landed on: %s (HTTP %d)", finalURL.String(), resp.StatusCode)
 	extId := finalURL.Query().Get("extId")
 	guid := finalURL.Query().Get("guid")
 
@@ -95,7 +98,7 @@ func InitGarminSession(inreachURL string) (*GarminSession, error) {
 
 	token, exists := doc.Find(`input[name="__RequestVerificationToken"]`).Attr("value")
 	if !exists {
-		return nil, fmt.Errorf("CSRF token not found in the Garmin HTML form")
+		return nil, fmt.Errorf("CSRF token not found in the Garmin HTML form (extId=%s) — Garmin may have changed their page or blocked the request", extId)
 	}
 
 	return &GarminSession{
@@ -132,6 +135,7 @@ func SendGarminReply(session *GarminSession, message string) error {
 	data.Set("guid", session.Guid)
 
 	chunks := splitForGarmin(message)
+	log.Printf("📤 Sending to Garmin: %d chars in %d part(s) [extId=%s]", len(message), len(chunks), session.ExtID)
 
 	for partNum, chunk := range chunks {
 		// Update the payload with the current chunk
@@ -155,13 +159,24 @@ func SendGarminReply(session *GarminSession, message string) error {
 			return fmt.Errorf("failed to execute POST for part %d: %v", partNum+1, err)
 		}
 
+		// Read a bounded slice of the response so we can tell a genuine success
+		// from a 200-with-error-page (CSRF rejection / WAF challenge), which
+		// otherwise silently looks like a successful send.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		log.Printf("📨 Garmin POST part %d/%d → HTTP %d (%d bytes resp)", partNum+1, len(chunks), resp.StatusCode, len(respBody))
+
 		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusFound {
-			resp.Body.Close()
-			return fmt.Errorf("garmin server rejected part %d. HTTP Status: %d", partNum+1, resp.StatusCode)
+			return fmt.Errorf("garmin server rejected part %d. HTTP Status: %d, body: %s", partNum+1, resp.StatusCode, snippet(respBody))
 		}
 
-		log.Printf("✅ Successfully sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
-		resp.Body.Close()
+		// 200/302 but the body hints at a failure page — surface it loudly.
+		if looksLikeGarminError(respBody) {
+			log.Printf("⚠️ Garmin returned HTTP %d for part %d but the response looks like an error/challenge page — the message may NOT have been delivered. Snippet: %s",
+				resp.StatusCode, partNum+1, snippet(respBody))
+		} else {
+			log.Printf("✅ Sent to Garmin: part %d/%d (%d chars)", partNum+1, len(chunks), len(chunk))
+		}
 
 		// Small delay to ensure messages aren't rate-limited and arrive in order
 		if partNum < len(chunks)-1 {
@@ -170,6 +185,36 @@ func SendGarminReply(session *GarminSession, message string) error {
 	}
 
 	return nil
+}
+
+// snippet returns a single-line, length-capped preview of a response body for logs.
+func snippet(b []byte) string {
+	s := strings.TrimSpace(string(b))
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "\r", " ")
+	if len(s) > 300 {
+		s = s[:300] + "…"
+	}
+	return s
+}
+
+// looksLikeGarminError heuristically detects a Garmin error/anti-bot page that
+// was returned with a 2xx/3xx status instead of a real rejection code.
+func looksLikeGarminError(b []byte) bool {
+	l := strings.ToLower(string(b))
+	for _, marker := range []string{
+		"requestverificationtoken", // the form was re-served → our POST wasn't accepted
+		"captcha",
+		"access denied",
+		"request blocked",
+		"an error occurred",
+		"<title>error",
+	} {
+		if strings.Contains(l, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func splitForGarmin(msg string) []string {
@@ -317,6 +362,79 @@ func sendTestEmailReply(toEmail, report, inReplyToMsgID, origSubject string) err
 }
 
 // ==========================================
+// DEBUG LOG CAPTURE
+// ==========================================
+//
+// The bot runs as a short-lived serverless function (Netlify cron / Lambda),
+// so a webpage cannot tail its stdout. logCapture tees every log line to the
+// original writer (stdout → Netlify/CloudWatch) AND buffers it, so the whole
+// invocation's logs can be flushed into the debug_log table in one batch and
+// streamed to the live log viewer at /debug.html.
+type logLine struct {
+	t    int64
+	text string
+}
+
+type logCapture struct {
+	out   io.Writer
+	runID string
+	mu    sync.Mutex
+	lines []logLine
+}
+
+// logPrefixRe strips Go's default "2009/01/23 01:23:23 " log prefix from the
+// stored copy (we keep our own ts column); the stdout copy is untouched.
+var logPrefixRe = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?\s+`)
+
+func (l *logCapture) Write(p []byte) (int, error) {
+	n, err := l.out.Write(p)
+	text := logPrefixRe.ReplaceAllString(strings.TrimRight(string(p), "\r\n"), "")
+	if text != "" {
+		l.mu.Lock()
+		l.lines = append(l.lines, logLine{t: time.Now().Unix(), text: text})
+		l.mu.Unlock()
+	}
+	return n, err
+}
+
+// flush persists the buffered lines to debug_log and prunes rows older than two
+// days. It must not call into the standard logger (that would recurse).
+func (l *logCapture) flush(db *sql.DB) {
+	l.mu.Lock()
+	lines := l.lines
+	l.lines = nil
+	l.mu.Unlock()
+	if db == nil || len(lines) == 0 {
+		return
+	}
+
+	tx, err := db.Begin()
+	if err != nil {
+		return
+	}
+	stmt, err := tx.Prepare(`INSERT INTO debug_log (ts, seq, run, msg) VALUES (?, ?, ?, ?)`)
+	if err != nil {
+		_ = tx.Rollback()
+		return
+	}
+	for i, ln := range lines {
+		if _, err := stmt.Exec(ln.t, i, l.runID, ln.text); err != nil {
+			break
+		}
+	}
+	_ = stmt.Close()
+	_ = tx.Commit()
+
+	_, _ = db.Exec(`DELETE FROM debug_log WHERE ts < ?`, time.Now().Unix()-2*24*3600)
+}
+
+// newRunID returns a short, time-ordered id used to group all log lines emitted
+// by a single handler invocation in the viewer.
+func newRunID() string {
+	return strconv.FormatInt(time.Now().UnixNano(), 36)
+}
+
+// ==========================================
 // DATABASE (TURSO)
 // ==========================================
 
@@ -369,6 +487,18 @@ func ensureSchema(db *sql.DB) error {
 		)`)
 	if err != nil {
 		return fmt.Errorf("create request_log: %w", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS debug_log (
+			id  INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts  INTEGER NOT NULL,
+			seq INTEGER NOT NULL,
+			run TEXT    NOT NULL,
+			msg TEXT    NOT NULL
+		)`)
+	if err != nil {
+		return fmt.Errorf("create debug_log: %w", err)
 	}
 	return nil
 }
@@ -427,6 +557,15 @@ func saveState(db *sql.DB, s SessionState) error {
 	return err
 }
 
+// humanAge renders the time since a unix timestamp for trace logs ("never" when
+// the timestamp is zero/unset).
+func humanAge(unix int64) string {
+	if unix == 0 {
+		return "never"
+	}
+	return time.Since(time.Unix(unix, 0)).Truncate(time.Second).String()
+}
+
 func routineBroadcastSlot(nowNZ time.Time) string {
 	return fmt.Sprintf("%s-%02d", nowNZ.Format("20060102"), nowNZ.Hour())
 }
@@ -452,9 +591,144 @@ func shouldRoutineBroadcast(state SessionState, nowNZ time.Time) bool {
 }
 
 // ==========================================
+// COMMAND / BODY PARSING (pure — unit-tested)
+// ==========================================
+
+// isGarminSender reports whether an email came from the Garmin/inReach gateway
+// (vs. a human emailing the bot directly to test).
+func isGarminSender(senderEmail string) bool {
+	s := strings.ToLower(senderEmail)
+	return strings.Contains(s, "garmin.com") || strings.Contains(s, "inreach")
+}
+
+// testCommand is the result of parsing a human (non-Garmin) test email.
+type testCommand struct {
+	IsAll     bool
+	IsUpdate  bool
+	HasCoords bool
+	Lat, Lon  float64
+}
+
+var (
+	testCoordRe  = regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
+	bareUpdateRe = regexp.MustCompile(`(?im)^\s*update\s*$`)
+	allRe        = regexp.MustCompile(`(?im)^\s*all\s*$`)
+)
+
+func parseTestCommand(subject, body string) testCommand {
+	combined := subject + "\n" + body
+	var tc testCommand
+	if allRe.MatchString(combined) {
+		tc.IsAll = true
+		return tc
+	}
+	if m := testCoordRe.FindStringSubmatch(combined); len(m) == 3 {
+		tc.IsUpdate = true
+		lat, errA := strconv.ParseFloat(m[1], 64)
+		lon, errB := strconv.ParseFloat(m[2], 64)
+		if errA == nil && errB == nil {
+			tc.HasCoords = true
+			tc.Lat, tc.Lon = lat, lon
+		}
+		return tc
+	}
+	if bareUpdateRe.MatchString(combined) {
+		tc.IsUpdate = true
+	}
+	return tc
+}
+
+// garminCommand is the result of parsing a Garmin/inReach gateway email.
+type garminCommand struct {
+	Shortlink           string
+	HasCoords           bool
+	Lat, Lon            float64
+	Start, Stop, Update bool
+}
+
+var (
+	shortlinkRe = regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9_]+`)
+	// Tolerant of "Lat -44.5 Lon 169.6", "Lat:-44.5 Lon:169.6", "Lat=-44.5, Lon=169.6".
+	garminCoordRe = regexp.MustCompile(`(?i)lat[:=\s]+([-\d.]+)[,\s]+lon[:=\s]+([-\d.]+)`)
+)
+
+func parseGarminBody(body string) garminCommand {
+	var gc garminCommand
+	gc.Shortlink = shortlinkRe.FindString(body)
+	// Coordinates live in Garmin's boilerplate ("…sent this message from: Lat …
+	// Lon …"), so scan the whole body for them.
+	if m := garminCoordRe.FindStringSubmatch(body); len(m) == 3 {
+		lat, errA := strconv.ParseFloat(m[1], 64)
+		lon, errB := strconv.ParseFloat(m[2], 64)
+		if errA == nil && errB == nil {
+			gc.HasCoords = true
+			gc.Lat, gc.Lon = lat, lon
+		}
+	}
+	// Detect commands ONLY in the user's typed portion (before Garmin's fixed
+	// boilerplate), so a device name or boilerplate wording can't trip a false
+	// START/STOP/UPDATE.
+	cmdText := strings.ToUpper(userMessage(body))
+	gc.Start = strings.Contains(cmdText, "START")
+	gc.Stop = strings.Contains(cmdText, "STOP")
+	gc.Update = strings.Contains(cmdText, "UPDATE")
+	return gc
+}
+
+// userMessage returns the leading portion of a Garmin email body — the text the
+// sender actually typed on the device — by cutting at the first line of Garmin's
+// fixed boilerplate. If no boilerplate marker is present, the whole body is
+// returned (e.g. locally-crafted test emails).
+func userMessage(body string) string {
+	end := len(body)
+	for _, marker := range []string{
+		"View the location",
+		"View the map",
+		"sent this message from",
+		"Do not reply directly",
+		"This message was sent to you using",
+	} {
+		if i := strings.Index(body, marker); i >= 0 && i < end {
+			end = i
+		}
+	}
+	return body[:end]
+}
+
+// ==========================================
+// GARMIN DELIVERY CHOKE POINT
+// ==========================================
+
+// sendToGarmin is the single path through which every report reaches a device.
+// In normal operation it POSTs via SendGarminReply. When GARMIN_DRY_RUN=1 it
+// skips Garmin entirely and emails the exact payload to GARMIN_DRY_RUN_REPLY_TO
+// (falling back to EMAIL_USER) so the full receive→parse→build→send pipeline can
+// be exercised and inspected without a real inReach device or satellite credits.
+func sendToGarmin(session *GarminSession, message, label string) error {
+	if os.Getenv("GARMIN_DRY_RUN") == "1" {
+		to := os.Getenv("GARMIN_DRY_RUN_REPLY_TO")
+		if to == "" {
+			to = os.Getenv("EMAIL_USER")
+		}
+		log.Printf("🧪 DRY RUN [%s]: skipping Garmin POST (%d chars); emailing payload to %s", label, len(message), to)
+		log.Printf("🧪 DRY RUN [%s] payload: %s", label, message)
+		return sendTestEmailReply(to, message, "", "Garmin Dry Run — "+label)
+	}
+	if session == nil {
+		return fmt.Errorf("no active Garmin session")
+	}
+	return SendGarminReply(session, message)
+}
+
+// ==========================================
 // MAIN HANDLER
 // ==========================================
 func handler(ctx context.Context) error {
+	// Capture all log output for this invocation so it can be streamed to the
+	// /debug.html live viewer. stdout/Netlify logs are preserved.
+	logCap := &logCapture{out: log.Writer(), runID: newRunID()}
+	log.SetOutput(logCap)
+
 	db, err := connectTurso()
 	if err != nil {
 		log.Fatalf("Turso connection failed: %v", err)
@@ -464,11 +738,17 @@ func handler(ctx context.Context) error {
 	if err := ensureSchema(db); err != nil {
 		log.Fatalf("DB schema init failed: %v", err)
 	}
+	// Flush captured logs after the run (registered after db.Close so it runs
+	// first, while the connection is still open).
+	defer logCap.flush(db)
 
 	state, err := loadState(db)
 	if err != nil {
 		log.Printf("Warning: Failed to load state: %v\n", err)
 	}
+	log.Printf("📋 State loaded: active=%v extId_set=%v guid_set=%v lat=%.5f lon=%.5f park=%s lastFetch=%s ago dryRun=%v",
+		state.Active, state.ExtID != "", state.GUID != "", state.Lat, state.Lon, state.Park,
+		humanAge(state.LastFetch), os.Getenv("GARMIN_DRY_RUN") == "1")
 
 	log.Println("Polling IMAP for commands...")
 	emailUser := os.Getenv("EMAIL_USER")
@@ -556,19 +836,18 @@ func handler(ctx context.Context) error {
 				log.Printf("Reading email body (decoded length: %d bytes)", len(bodyStr))
 
 				// --- Identify if the sender is Garmin ---
-				isGarminEmail := strings.Contains(strings.ToLower(senderEmail), "garmin.com") || strings.Contains(strings.ToLower(senderEmail), "inreach")
+				isGarminEmail := isGarminSender(senderEmail)
+				log.Printf("🧭 Routing: sender=%q isGarmin=%v subject=%q bodyLen=%d", senderEmail, isGarminEmail, subject, len(bodyStr))
 
 				// 1. TEST COMMAND PARSER (subject OR body)
 				// Only run this block if the email is NOT from Garmin
 				if !isGarminEmail {
-					testCoordRegex := regexp.MustCompile(`(?i)update\s+lat:\s*([-\d.]+),\s*long:\s*([-\d.]+)`)
-					bareUpdateRegex := regexp.MustCompile(`(?im)^\s*update\s*$`)
-					allRegex := regexp.MustCompile(`(?im)^\s*all\s*$`)
-
-					combined := subject + "\n" + bodyStr
+					tc := parseTestCommand(subject, bodyStr)
+					log.Printf("🧭 Test parse: isAll=%v isUpdate=%v hasCoords=%v lat=%.5f lon=%.5f",
+						tc.IsAll, tc.IsUpdate, tc.HasCoords, tc.Lat, tc.Lon)
 
 					// "all" — return forecasts for every registered park
-					if allRegex.MatchString(combined) {
+					if tc.IsAll {
 						log.Println("🗺️ ALL parks command detected! Fetching forecasts for all parks...")
 						logRequest(db, "email", replyTo, "ALL", 0, 0, "all")
 						finalMsg := forecast.BuildAllReports()
@@ -584,29 +863,22 @@ func handler(ctx context.Context) error {
 						continue
 					}
 
-					var testLat, testLon float64
-					isTest := false
-
-					if match := testCoordRegex.FindStringSubmatch(combined); len(match) == 3 {
-						testLat, _ = strconv.ParseFloat(match[1], 64)
-						testLon, _ = strconv.ParseFloat(match[2], 64)
-						isTest = true
-					} else if bareUpdateRegex.MatchString(combined) {
-						testLat = state.Lat
-						testLon = state.Lon
-						isTest = true
-					}
-
-					if isTest {
-						log.Println("🧪 Test command detected! Fetching immediate weather...")
+					if tc.IsUpdate {
+						log.Println("🧪 Test UPDATE command detected! Fetching immediate weather…")
+						testLat, testLon := tc.Lat, tc.Lon
+						if !tc.HasCoords {
+							testLat, testLon = state.Lat, state.Lon
+							log.Printf("🧪 No coords in email — using last-known state coords (%.5f, %.5f)", testLat, testLon)
+						}
 						sendOK := true
 						if testLat == 0 && testLon == 0 {
-							log.Println("Cannot process test update: No coordinates available.")
+							log.Println("⚠️ Cannot process test update: No coordinates available (none in email and none stored).")
 						} else {
 							testPark := forecast.GetClosestPark(testLat, testLon)
 							testAlt := forecast.GetElevation(testLat, testLon)
 							logRequest(db, "email", replyTo, "UPDATE", testLat, testLon, testPark)
 							finalMsg := forecast.BuildReport(testLat, testLon, testAlt, testPark)
+							log.Printf("🧪 Built report (%d chars) → emailing reply to %s", len(finalMsg), replyTo)
 							if err := sendTestEmailReply(replyTo, finalMsg, msg.Envelope.MessageId, subject); err != nil {
 								sendOK = false
 							}
@@ -628,85 +900,77 @@ func handler(ctx context.Context) error {
 					continue
 				}
 
+				gc := parseGarminBody(bodyStr)
+				log.Printf("🧭 Garmin parse: shortlink=%v hasCoords=%v lat=%.5f lon=%.5f start=%v stop=%v update=%v",
+					gc.Shortlink != "", gc.HasCoords, gc.Lat, gc.Lon, gc.Start, gc.Stop, gc.Update)
+
 				garminDirty := false
 				locationChanged := false
 				var activeSession *GarminSession // Hoist session so it survives the if-block
 
-				// Check for Garmin inReach Shortlink
-				linkRegex := regexp.MustCompile(`https://inreachlink\.com/[A-Za-z0-9_]+`)
-				shortlink := linkRegex.FindString(bodyStr)
+				// --- Coordinates (parsed regardless of shortlink presence) ---
+				if gc.HasCoords {
+					newPark := forecast.GetClosestPark(gc.Lat, gc.Lon)
+					locationChanged = (newPark != state.Park) || (gc.Lat != state.Lat) || (gc.Lon != state.Lon)
+					state.Lat = gc.Lat
+					state.Lon = gc.Lon
+					state.Park = newPark
+					state.Alt = forecast.GetElevation(gc.Lat, gc.Lon)
+					log.Printf("📍 Parsed coordinates: Lat=%f Lon=%f Park=%s Alt=%d (changed=%v)",
+						state.Lat, state.Lon, state.Park, state.Alt, locationChanged)
+				} else {
+					log.Println("📍 No coordinates found in the email body.")
+				}
 
-				if shortlink != "" {
-					log.Printf("Extracted inReach Link: %s", shortlink)
-
-					// --- Extract Coordinates from Email Body ---
-					// Matches: "Lat -44.578335 Lon 169.628649"
-					latLonRegex := regexp.MustCompile(`Lat\s*([-\d.]+)\s*Lon\s*([-\d.]+)`)
-					coordMatch := latLonRegex.FindStringSubmatch(bodyStr)
-
-					if len(coordMatch) == 3 {
-						newLat, _ := strconv.ParseFloat(coordMatch[1], 64)
-						newLon, _ := strconv.ParseFloat(coordMatch[2], 64)
-
-						newPark := forecast.GetClosestPark(newLat, newLon)
-						locationChanged = (newPark != state.Park) || (newLat != state.Lat) || (newLon != state.Lon)
-
-						state.Lat = newLat
-						state.Lon = newLon
-						state.Park = newPark
-						state.Alt = forecast.GetElevation(newLat, newLon)
-
-						log.Printf("Parsed Coordinates from Email: Lat=%f, Lon=%f, Park=%s", state.Lat, state.Lon, state.Park)
-					} else {
-						log.Println("No coordinates found in the plain text email body.")
-						logRequest(db, "garmin", state.ExtID, "No-coord-in-email", 0.0, 0.0, "none")
-					}
-
-					// Establish the security session for the reply by following the shortlink
-					session, err := InitGarminSession(shortlink)
+				// --- Establish reply session from the inReach shortlink ---
+				if gc.Shortlink != "" {
+					log.Printf("🔗 Extracted inReach shortlink: %s", gc.Shortlink)
+					session, err := InitGarminSession(gc.Shortlink)
 					if err != nil {
 						log.Printf("❌ Failed to init Garmin session: %v", err)
 					} else {
 						activeSession = session
 						garminDirty = true
-
-						// Save the ExtID and GUID to Turso for routine cron broadcasts
 						state.ExtID = session.ExtID
 						state.GUID = session.Guid
+						log.Printf("✅ Garmin session established (extId=%s, token len=%d)", session.ExtID, len(session.Token))
 					}
 				} else {
-					log.Println("No inreachlink.com URL found in email.")
-					logRequest(db, "garmin", "no link", "update no link found in email", 0.0, 0.0, "no park")
+					log.Println("🔗 No inreachlink.com shortlink in email.")
+					if !gc.HasCoords {
+						logRequest(db, "garmin", "no link", "update no link found in email", 0.0, 0.0, "no park")
+					}
 				}
 
-				upperBody := strings.ToUpper(bodyStr)
-
-				if strings.Contains(upperBody, "START") {
+				if gc.Start {
 					state.Active = true
 					garminDirty = true
 					log.Println("Action: START tracking.")
 					logRequest(db, "garmin", state.ExtID, "START", state.Lat, state.Lon, state.Park)
-				} else if strings.Contains(upperBody, "STOP") {
+				} else if gc.Stop {
 					state.Active = false
 					garminDirty = true
 					log.Println("Action: STOP tracking.")
 					logRequest(db, "garmin", state.ExtID, "STOP", state.Lat, state.Lon, state.Park)
-
-					if activeSession != nil {
-						_ = SendGarminReply(activeSession, "Server: Updates Paused.")
+					if activeSession != nil || os.Getenv("GARMIN_DRY_RUN") == "1" {
+						_ = sendToGarmin(activeSession, "Server: Updates Paused.", "STOP")
 					}
 				}
 
-				isUpdateCmd := strings.Contains(upperBody, "UPDATE")
+				isUpdateCmd := gc.Update
 				if isUpdateCmd {
 					log.Println("Action: UPDATE triggered manually via email.")
 				}
 
 				isStale := time.Now().Unix()-state.LastFetch > (12 * 3600)
+				dryRun := os.Getenv("GARMIN_DRY_RUN") == "1"
+				wantFetch := isUpdateCmd || (state.Active && (locationChanged || isStale))
+				log.Printf("🧮 Fetch decision: update=%v active=%v locationChanged=%v stale=%v hasSession=%v dryRun=%v → fetch=%v",
+					isUpdateCmd, state.Active, locationChanged, isStale, activeSession != nil, dryRun, wantFetch)
 
 				// IMMEDIATE FETCH LOGIC:
 				// If they send "UPDATE", we fetch. Otherwise, if active, we fetch on new location or stale data.
-				if isUpdateCmd || (state.Active && (locationChanged || isStale)) {
+				if wantFetch {
 					log.Println("🚀 Immediate fetch triggered! (New location, stale data, or UPDATE cmd)")
 
 					if state.Lat == 0 && state.Lon == 0 {
@@ -720,17 +984,17 @@ func handler(ctx context.Context) error {
 						logRequest(db, "garmin", state.ExtID, cmd, state.Lat, state.Lon, state.Park)
 
 						finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
+						log.Printf("🧮 Built report (%d chars): %s", len(finalMsg), finalMsg)
 
-						if activeSession != nil {
-							err := SendGarminReply(activeSession, finalMsg)
-							if err != nil {
+						if activeSession == nil && !dryRun {
+							log.Println("⚠️ Cannot send weather: no active Garmin session (no inreachlink shortlink in email, or session init failed).")
+						} else {
+							if err := sendToGarmin(activeSession, finalMsg, cmd); err != nil {
 								log.Printf("❌ Failed to send weather reply: %v", err)
 							} else {
 								state.LastFetch = time.Now().Unix()
 								garminDirty = true
 							}
-						} else {
-							log.Println("⚠️ Cannot send weather: No active Garmin session.")
 						}
 					}
 				}
@@ -765,13 +1029,19 @@ func handler(ctx context.Context) error {
 			logRequest(db, "garmin", state.ExtID, "ROUTINE", state.Lat, state.Lon, state.Park)
 			finalMsg := forecast.BuildReport(state.Lat, state.Lon, state.Alt, state.Park)
 
-			// Establish a fresh Garmin Session using the Turso-stored credentials
-			routineSession, err := InitGarminSessionFromState(state.ExtID, state.GUID)
-			if err != nil {
-				log.Printf("❌ Failed to init routine Garmin session: %v", err)
-			} else {
-				err = SendGarminReply(routineSession, finalMsg)
+			// Establish a fresh Garmin session from the Turso-stored credentials
+			// (skipped in dry-run, where sendToGarmin emails the payload instead).
+			var routineSession *GarminSession
+			if os.Getenv("GARMIN_DRY_RUN") != "1" {
+				routineSession, err = InitGarminSessionFromState(state.ExtID, state.GUID)
 				if err != nil {
+					log.Printf("❌ Failed to init routine Garmin session: %v", err)
+					routineSession = nil
+				}
+			}
+
+			if routineSession != nil || os.Getenv("GARMIN_DRY_RUN") == "1" {
+				if err := sendToGarmin(routineSession, finalMsg, "ROUTINE"); err != nil {
 					log.Printf("❌ Failed to send routine broadcast: %v", err)
 				} else {
 					state.LastFetch = time.Now().Unix()

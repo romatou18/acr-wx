@@ -56,7 +56,7 @@ func TestGarminDeviceLoop(t *testing.T) {
 
 	// ── Step 2: wait for the email to appear in INBOX ─────────────────────────
 	t.Log("Step 2: waiting for emulator email to land in INBOX…")
-	if err := waitForEmail(emailUser, emailPass, "[inReach] Location Update", 60*time.Second); err != nil {
+	if err := waitForEmail(emailUser, emailPass, "inReach message from", 60*time.Second); err != nil {
 		t.Fatalf("emulator email never arrived: %v", err)
 	}
 	t.Log("  ✅ emulator email visible in INBOX")
@@ -91,21 +91,34 @@ func TestGarminDeviceLoop(t *testing.T) {
 // device sends after a location ping — including the reply URL that carries
 // the extId/guid session tokens and the inline Lat/Lon stamp.
 func sendGarminEmulatorEmail(fromAddr, pass, toAddr string) error {
+	// Mirrors a REAL inReach "Update" email (single-part text/plain, shortlink +
+	// "Lat .. Lon .." stamp + boilerplate), captured from a live device.
+	//
+	// NOTE: Gmail SMTP rewrites From to the authenticated account, so this email
+	// does NOT arrive from a garmin.com address — isGarminSender() is false. To
+	// still drive the Garmin reply path (not the human "test reply" path), the
+	// device message is phrased inline ("UPDATE wx") so it does not match the
+	// bare-^update$ test trigger and instead falls through to the Garmin parser,
+	// which keys off the inreachlink shortlink. Combined with GARMIN_DRY_RUN=1 the
+	// bot emails back a "Garmin Dry Run" reply instead of POSTing to Garmin. Swap
+	// in a real, fresh shortlink to also exercise the live session/anti-bot
+	// handshake in InitGarminSession.
 	body := fmt.Sprintf(
-		"Your inReach device has sent a message.\r\n"+
+		"UPDATE wx\r\n"+
 			"\r\n"+
-			"Message: START\r\n"+
+			"View the location or send a reply to Emulator Device:\r\n"+
+			"https://inreachlink.com/EMULATORtestlink\r\n"+
 			"\r\n"+
-			"Lat:%.6f Lon:%.6f\r\n"+
+			"Emulator Device sent this message from: Lat %.6f Lon %.6f\r\n"+
 			"\r\n"+
-			"Reply to device: https://explore.garmin.com/TextMessage/TxtMsg?extId=%s&guid=%s\r\n",
-		emulatorLat, emulatorLon, emulatorExtID, emulatorGUID,
+			"Do not reply directly to this message.\r\n",
+		emulatorLat, emulatorLon,
 	)
 
 	raw := []byte(
 		"From: " + fromAddr + "\r\n" +
 			"To: " + toAddr + "\r\n" +
-			"Subject: [inReach] Location Update from Emulator\r\n" +
+			"Subject: inReach message from Emulator Device\r\n" +
 			"MIME-Version: 1.0\r\n" +
 			"Content-Type: text/plain; charset=UTF-8\r\n" +
 			"\r\n" +

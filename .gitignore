@@ -4,3 +4,6 @@
 
 # Local test logs
 /logs/
+
+# Captured Garmin email samples (scratch inputs, not part of the app)
+/*.html

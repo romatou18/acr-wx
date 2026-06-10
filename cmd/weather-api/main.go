@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -26,6 +27,11 @@ func handler(_ context.Context, req events.APIGatewayProxyRequest) (events.APIGa
 	// GET /log or /weather-api/log  — usage log
 	if path == "/weather-api/log" || path == "/log" {
 		return handleLogs(req)
+	}
+
+	// GET /debug or /weather-api/debug  — JSON debug logs for the live viewer
+	if path == "/weather-api/debug" || path == "/debug" {
+		return handleDebug(req)
 	}
 
 	// GET /weather-api/all  — report for every registered park
@@ -123,6 +129,73 @@ func handleLogs(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRespon
 	return ok(sb.String()), nil
 }
 
+// handleDebug serves the bot's captured debug logs as JSON for the live viewer
+// at /debug.html. Supports incremental polling via ?after=<id> (returns only
+// rows newer than that id); with no/zero after it returns the most recent 300
+// lines in chronological order. Protected by the same LOGS_KEY as /log.
+func handleDebug(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if key := os.Getenv("LOGS_KEY"); key != "" && req.QueryStringParameters["key"] != key {
+		return jsonResp(401, `{"error":"unauthorized — set ?key=<LOGS_KEY>"}`), nil
+	}
+
+	db, err := connectTurso()
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "db connect: "+err.Error())), nil
+	}
+	defer db.Close()
+
+	// Tolerate a fresh DB where the bot hasn't created the table yet.
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS debug_log (
+		id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL,
+		seq INTEGER NOT NULL, run TEXT NOT NULL, msg TEXT NOT NULL)`)
+
+	after, _ := strconv.ParseInt(req.QueryStringParameters["after"], 10, 64)
+
+	var rows *sql.Rows
+	if after > 0 {
+		rows, err = db.Query(`SELECT id, ts, run, msg FROM debug_log WHERE id > ? ORDER BY id ASC LIMIT 1000`, after)
+	} else {
+		rows, err = db.Query(`SELECT id, ts, run, msg FROM (SELECT id, ts, run, msg FROM debug_log ORDER BY id DESC LIMIT 300) ORDER BY id ASC`)
+	}
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "query: "+err.Error())), nil
+	}
+	defer rows.Close()
+
+	type entry struct {
+		ID  int64  `json:"id"`
+		TS  int64  `json:"ts"`
+		Run string `json:"run"`
+		Msg string `json:"msg"`
+	}
+	out := []entry{}
+	for rows.Next() {
+		var e entry
+		if err := rows.Scan(&e.ID, &e.TS, &e.Run, &e.Msg); err != nil {
+			continue
+		}
+		out = append(out, e)
+	}
+
+	b, err := json.Marshal(out)
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "marshal: "+err.Error())), nil
+	}
+	return jsonResp(200, string(b)), nil
+}
+
+func jsonResp(code int, body string) events.APIGatewayProxyResponse {
+	return events.APIGatewayProxyResponse{
+		StatusCode: code,
+		Headers: map[string]string{
+			"Content-Type":                "application/json; charset=utf-8",
+			"Access-Control-Allow-Origin": "*",
+			"Cache-Control":               "no-store",
+		},
+		Body: body,
+	}
+}
+
 func connectTurso() (*sql.DB, error) {
 	dbURL := os.Getenv("TURSO_DB_URL")
 	token := os.Getenv("TURSO_AUTH_TOKEN")
@@ -157,17 +230,29 @@ func main() {
 	if os.Getenv("LOCAL_WEATHER_API") == "1" {
 		handle := func(w http.ResponseWriter, r *http.Request) {
 			resp, _ := handler(r.Context(), events.APIGatewayProxyRequest{
-				Path:                  r.URL.Path,
-				QueryStringParameters: map[string]string{"lat": r.URL.Query().Get("lat"), "lon": r.URL.Query().Get("lon"), "key": r.URL.Query().Get("key")},
+				Path: r.URL.Path,
+				QueryStringParameters: map[string]string{
+					"lat":   r.URL.Query().Get("lat"),
+					"lon":   r.URL.Query().Get("lon"),
+					"key":   r.URL.Query().Get("key"),
+					"after": r.URL.Query().Get("after"),
+				},
 			})
-			w.Header().Set("Content-Type", resp.Headers["Content-Type"])
+			for k, v := range resp.Headers {
+				w.Header().Set(k, v)
+			}
 			w.WriteHeader(resp.StatusCode)
 			fmt.Fprint(w, resp.Body)
 		}
 		http.HandleFunc("/weather-api/all", handle)
 		http.HandleFunc("/weather-api/log", handle)
+		http.HandleFunc("/weather-api/debug", handle)
+		http.HandleFunc("/log", handle)
+		http.HandleFunc("/debug", handle)
 		http.HandleFunc("/weather-api", handle)
-		log.Println("Listening on :9090")
+		// Serve the static pages (index.html, debug.html) so the viewer works locally.
+		http.Handle("/", http.FileServer(http.Dir("public")))
+		log.Println("Listening on :9090  (try http://localhost:9090/debug.html)")
 		log.Fatal(http.ListenAndServe(":9090", nil))
 		return
 	}
