@@ -56,6 +56,40 @@ Because satellite data is expensive and limited to 160 characters per message, t
 
 ---
 
+## 📚 API Endpoints
+
+The `weather-api` function serves a handful of HTTP endpoints. They're exposed at friendly paths via `netlify.toml` redirects (the underlying function path is `/.netlify/functions/weather-api/*`, and each also has a `/weather-api/<name>` alias).
+
+| Method & Path | Purpose | Auth | Notes |
+|---|---|---|---|
+| `GET /weather-api?lat=<lat>&lon=<lon>` | Compressed `<160`-char weather report for a coordinate (same payload the device receives). | — | `lat`/`lon` required & range-checked; returns `text/plain`. |
+| `GET /weather-api/all` | The report for **every** registered park/region. | — | Handy for eyeballing all geofences at once. |
+| `GET /log` | Usage log (`request_log`) rendered as a readable text table — who asked for what, when, and where. | `LOGS_KEY` | Alias: `/weather-api/log`. |
+| `GET /debug` | Per-invocation captured `log.*` output as **JSON**, for the live viewer. | `LOGS_KEY` | `?after=<id>` for incremental polling; returns the most recent ~300 lines otherwise. |
+| `GET /pause?mins=<N>` | Suspend the bot's inbound processing for `N` minutes (so a fresh single-use Garmin shortlink isn't burned by the cron). | `LOGS_KEY` | Default `15`, capped `120`; **auto-resumes** when it lapses. Returns JSON `{paused, mins, resumes_at_nzt}`. |
+| `GET /resume` | Clear the pause flag immediately. | `LOGS_KEY` | Returns `{"resumed":true}`. |
+| `POST /garmin-parse-test` | Upload a saved Garmin message page (raw HTML body); returns a parse **PASS/FAIL** verdict with the extracted `Guid`/`MessageId`/coords. | `LOGS_KEY` | Parsed in memory only, never stored. See [Validating the Real Garmin Page Parser](#-validating-the-real-garmin-page-parser). |
+
+**Static pages** (served from `public/`):
+
+| Path | Purpose |
+|---|---|
+| `/` (`index.html`) | User guide. |
+| `/debug.html` | Live, colour-coded, auto-scrolling log viewer (polls `/debug`). |
+| `/garmin-test.html` | Upload UI for the Garmin page parse test (calls `/garmin-parse-test`). |
+
+Architecture & flow diagrams (Mermaid) live in [`docs/architecture.html`](docs/architecture.html) — open it locally in a browser; it is not deployed.
+
+**Auth:** endpoints marked `LOGS_KEY` require `?key=<LOGS_KEY>` when the `LOGS_KEY` env var is set; if it's unset, they're open. Example:
+
+```bash
+curl "https://<your-site>/log?key=$LOGS_KEY"
+curl "https://<your-site>/debug?key=$LOGS_KEY&after=0"
+curl "https://<your-site>/pause?key=$LOGS_KEY&mins=15"
+```
+
+---
+
 ## 🧪 Testing Locally (The Email Loop)
 
 You don't need to burn expensive Garmin satellite credits to test the bot. The application includes a built-in standard email testing loop.
@@ -105,3 +139,36 @@ go test -tags integration ./cmd/bot/   # full live email loop (needs Gmail + Tur
 ```bash
 LOCAL_WEATHER_API=1 ./functions/weather-api   # serves :9090 + public/ → http://localhost:9090/debug.html
 ```
+
+---
+
+## 🧭 Validating the Real Garmin Page Parser
+
+The most fragile part of the bridge is scraping the live `explore.garmin.com` message page for the `Guid`/`MessageId` reply target and the sender's coordinates. Garmin changes that page from time to time, which silently breaks replies. There are two complementary checks.
+
+### 1. Automated tests (committed real page)
+
+```bash
+go test ./cmd/bot/          # includes TestGarminReplyLoop_* — drives shortlink GET →
+                            # redirect → page parse → JSON "Send" POST against a fake
+                            # Garmin (httptest) using a real captured page fixture
+go test ./internal/garmin/  # the shared page parsers in isolation
+```
+
+The parsers live in **`internal/garmin`** (`ParseReplyFields`, `ParseShortlinkCoords`, `AnalyzePage`) and are shared by both the bot and the upload endpoint — so the tests exercise the exact code the bot relies on.
+
+### 2. On-demand check (upload a fresh page)
+
+When you want to confirm the **current** live layout still parses — without committing a new fixture or rebuilding — capture a real page and upload it:
+
+1. Open a fresh inReach message page in your browser and save it as HTML (DevTools → right-click the `<html>` element → **Copy outerHTML**, or **Save As**).
+2. Run the parse test:
+   * **Web UI:** open **`/garmin-test.html`** (e.g. `https://<your-site>/garmin-test.html`), enter your `LOGS_KEY`, pick the file, and click **Run parse test**.
+   * **API:** `curl --data-binary @page.html "https://<your-site>/garmin-parse-test?key=<LOGS_KEY>"`
+3. Read the verdict:
+   * **PASS** (`ok: true`, Guid + MessageId found) → the bot can still reply to the device.
+   * **FAIL** (e.g. *"Guid hidden input not found"*) → Garmin changed the page; fix the parser in `internal/garmin` before it breaks live replies.
+
+Both paths run `internal/garmin.AnalyzePage`, so a PASS is a real guarantee. Coordinates are **optional** in the verdict — app-relayed messages legitimately report no GPS fix (`0,0`), and the bot falls back to the last-known location. The uploaded HTML is parsed in memory only and never stored; the endpoint is guarded by `LOGS_KEY` (like `/debug`).
+
+> **Tip:** to capture a *fresh* page, suspend the bot first (`GET /pause?key=<LOGS_KEY>&mins=15`) so the minute-cron doesn't consume the single-use shortlink before you grab it, then `GET /resume?key=<LOGS_KEY>` when done.

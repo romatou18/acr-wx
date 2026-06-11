@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ACR Alpine Weather — Architecture & Flow Diagrams</title>
+  <style>
+    :root {
+      --bg: #0f1117;
+      --surface: #1a1d27;
+      --border: #2a2d3e;
+      --accent: #4f8ef7;
+      --text: #e2e4ed;
+      --muted: #8b90a8;
+      --radius: 12px;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      padding: 2rem 1.25rem 4rem;
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; }
+    h1 { font-size: 1.5rem; color: #fff; margin: 0 0 .3rem; }
+    h1 span { color: var(--accent); }
+    .sub { color: var(--muted); margin: 0 0 2rem; font-size: .95rem; }
+    h2 {
+      font-size: 1.15rem; color: #fff; margin: 2.6rem 0 .4rem;
+      border-bottom: 1px solid var(--border); padding-bottom: .4rem;
+    }
+    p.desc { color: var(--muted); font-size: .9rem; margin: .3rem 0 1rem; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      overflow-x: auto;
+    }
+    .mermaid { text-align: center; }
+    nav { margin-bottom: 1.5rem; font-size: .9rem; }
+    nav a { color: var(--accent); text-decoration: none; margin-right: 1rem; }
+    nav a:hover { text-decoration: underline; }
+    code { background: #12141c; padding: .1rem .35rem; border-radius: 5px; font-size: .85em; }
+    footer { color: var(--muted); font-size: .82rem; margin-top: 3rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>🏔️ ACR Alpine Weather — <span>Architecture &amp; Flow</span></h1>
+    <p class="sub">How an inReach satellite message becomes a compressed weather reply on the device, and how each loop is tested. Rendered with Mermaid.</p>
+
+    <nav>
+      <a href="#components">1 · Components</a>
+      <a href="#sequence">2 · Message → Reply</a>
+      <a href="#routing">3 · Handler routing</a>
+      <a href="#tests">4 · Test loops</a>
+    </nav>
+
+    <h2 id="components">1 · System components (block diagram)</h2>
+    <p class="desc">The serverless bridge: a 1-minute cron drives the <code>weather-bot</code> Lambda, which reads Gmail over IMAP, fetches weather, and posts replies back through Garmin. The <code>weather-api</code> Lambda serves the viewer/test endpoints. State lives in Turso.</p>
+    <div class="card">
+<pre class="mermaid">
+flowchart TB
+  IR["📡 Garmin inReach device"]
+  SAT["Iridium satellite network"]
+  GREL["Garmin mail relay<br/>no.reply.inreach@garmin.com"]
+  GW["explore.garmin.com<br/>TextMessage gateway (per-region host)"]
+  INBOX["Gmail bot inbox (EMAIL_USER)<br/>IMAP read + SMTP send"]
+
+  CRON["Netlify cron — every minute"]
+  BOT["weather-bot Lambda<br/>cmd/bot"]
+  API["weather-api Lambda<br/>cmd/weather-api"]
+
+  SS["session_state<br/>coords · park · ext_id/guid · paused_until"]
+  RL["request_log"]
+  DL["debug_log"]
+
+  YR["yr.no"]
+  MS["MetService"]
+  AV["NZ Avalanche Advisory"]
+
+  VIEW["/debug.html · /garmin-test.html<br/>static viewers"]
+
+  IR -->|"UPDATE over satellite"| SAT --> GREL --> INBOX
+  CRON --> BOT
+  BOT -->|"IMAP poll UNSEEN"| INBOX
+  BOT -->|"SMTP (dry-run / human test reply)"| INBOX
+  BOT --> YR
+  BOT --> MS
+  BOT --> AV
+  BOT -->|"GET shortlink + POST reply JSON"| GW
+  GW -->|"deliver reply"| SAT --> IR
+  BOT <-->|"load/save"| SS
+  BOT --> RL
+  BOT --> DL
+  API --> SS
+  API --> RL
+  API --> DL
+  VIEW -->|"poll JSON"| API
+</pre>
+    </div>
+
+    <h2 id="sequence">2 · Message → reply (sequence diagram)</h2>
+    <p class="desc">The end-to-end happy path for a single <code>UPDATE</code>, including the no-coordinates fallback (recover the fix from the message page) and the dry-run branch.</p>
+    <div class="card">
+<pre class="mermaid">
+sequenceDiagram
+    autonumber
+    participant U as inReach device
+    participant G as Garmin + Iridium
+    participant M as Gmail inbox
+    participant B as weather-bot (cron 1/min)
+    participant T as Turso
+    participant P as explore.garmin.com
+    participant W as Weather APIs
+
+    U->>G: Type "UPDATE", send over satellite
+    G->>M: Email "inReach message from &lt;device&gt;"
+    Note over B,T: Cron fires → connectTurso, ensureSchema, loadState
+    B->>T: read paused_until
+    alt processing suspended
+        B-->>B: skip cycle (mail left UNSEEN)
+    else active
+        B->>M: IMAP poll UNSEEN
+        M-->>B: raw RFC822 message
+        B->>B: extractEmailBody (MIME / quoted-printable)
+        B->>B: isGarminSender? → parseGarminBody
+        Note right of B: shortlink, Lat/Lon, command<br/>(START / STOP / UPDATE)
+        opt body has no coordinates
+            B->>P: GET inreachlink shortlink (follow redirect)
+            P-->>B: message page HTML
+            B->>B: parseShortlinkCoords (Locations[])
+        end
+        B->>B: parseGarminReplyFields → Guid, MessageId
+        B->>B: GetClosestPark + GetElevation (geofence)
+        par concurrent fetch
+            B->>W: yr.no — temp/precip at altitude
+        and
+            B->>W: MetService — summary + wind profile
+        and
+            B->>W: NZ Avalanche Advisory — danger rating
+        end
+        W-->>B: forecasts
+        B->>B: BuildReport → under 160 chars (splitForGarmin)
+        alt GARMIN_DRY_RUN=1
+            B->>M: SMTP the payload (no satellite cost)
+        else live delivery
+            B->>P: POST /TextMessage/TxtMsg {Guid, MessageId, ReplyMessage}
+            P-->>B: {"Success":true} (garminSendOK)
+            P->>G: relay reply
+            G->>U: weather report on device
+        end
+        B->>T: saveState + logRequest, mark email SEEN
+    end
+    B->>T: flush debug_log (→ /debug.html)
+</pre>
+    </div>
+
+    <h2 id="routing">3 · Handler routing &amp; routine broadcasts (flowchart)</h2>
+    <p class="desc">What one <code>handler()</code> invocation decides: the pause gate, Garmin vs human-test sender routing, command handling, the delivery choke point, and the 07:00/19:00 NZ routine broadcast (which rebuilds a session from stored tokens — no fresh shortlink needed).</p>
+    <div class="card">
+<pre class="mermaid">
+flowchart TD
+  S["Cron tick → handler()"] --> PS{"paused_until &gt; now?"}
+  PS -->|yes| SKIP["Skip cycle<br/>(mail stays UNSEEN)"]
+  PS -->|no| POLL["IMAP poll UNSEEN"]
+  POLL --> EACH{"new message?"}
+
+  EACH -->|"no new mail"| RB{"07:00 / 19:00 NZ<br/>window &amp; not yet sent?"}
+  RB -->|yes| BC["InitGarminSessionFromState<br/>broadcast fresh report"]
+  RB -->|no| DONE["done → flush debug_log"]
+
+  EACH -->|yes| SENDER{"isGarminSender?"}
+  SENDER -->|"human test"| TP["parseTestCommand<br/>update · all · lat/long"]
+  SENDER -->|Garmin| GP["parseGarminBody<br/>shortlink · coords · command"]
+
+  GP --> CMD{"command"}
+  CMD -->|"START / STOP"| STATE["toggle active<br/>in session_state"]
+  CMD -->|UPDATE| FETCH["geofence → fetch → BuildReport"]
+  TP --> FETCH
+
+  FETCH --> DELIV{"GARMIN_DRY_RUN?"}
+  DELIV -->|"1"| MAIL["sendToGarmin → email payload (SMTP)"]
+  DELIV -->|"0"| POST["sendToGarmin → SendGarminReply<br/>POST to explore.garmin.com"]
+  POST --> OKCHK{"{Success:true}?"}
+  OKCHK -->|yes| SAVE["saveState · logRequest · mark SEEN"]
+  OKCHK -->|"no / error page"| RETRY["error logged;<br/>message left UNSEEN for retry"]
+  MAIL --> SAVE
+  STATE --> SAVE
+  BC --> SAVE
+</pre>
+    </div>
+
+    <h2 id="tests">4 · Test loops (flowchart)</h2>
+    <p class="desc">Three layers of coverage. <strong>Offline</strong> runs with no network or device (plain <code>go test</code>). <strong>Integration</strong> exercises the real email loop / live Garmin handshake. <strong>On-demand</strong> validates a freshly-captured page against the deployed parser. The committed golden page feeds the offline loop; <code>/pause</code> frees the cron so a fresh single-use page can be captured for the live/upload checks.</p>
+    <div class="card">
+<pre class="mermaid">
+flowchart LR
+  FIX["cmd/bot/testdata/<br/>garmin_message_page.html<br/>(real, sanitized golden page)"]
+
+  subgraph OFFLINE["Offline · go test ./...  (no network/device)"]
+    UT["parse_test.go<br/>pure parse + routing"]
+    GT["internal/garmin<br/>AnalyzePage / parsers"]
+    LOOP["garmin_reply_loop_test.go<br/>fake Garmin (httptest):<br/>GET→redirect→parse→POST<br/>+ chunking + failure detection"]
+  end
+
+  subgraph INTEG["Integration · go test -tags integration"]
+    DRY["TestGarminDeviceLoop<br/>emulator email → handler<br/>GARMIN_DRY_RUN=1 → reply by email"]
+    LIVE["TestGarminLiveHandshake<br/>real shortlink GET only, no send<br/>(GARMIN_TEST_SHORTLINK)"]
+  end
+
+  subgraph DEMAND["On-demand · deployed"]
+    UP["/garmin-test.html → POST /garmin-parse-test<br/>upload real page → PASS / FAIL"]
+    PAUSE["/pause + /resume<br/>freeze cron to capture a fresh page"]
+  end
+
+  FIX --> LOOP
+  FIX --> GT
+  PAUSE -.->|"enables capture for"| LIVE
+  PAUSE -.->|"enables capture for"| UP
+  GT -. "same parser" .- UP
+</pre>
+    </div>
+
+    <footer>
+      Source of truth: <code>GARMIN.md</code> (pipeline), <code>cmd/bot/main.go</code> (handler),
+      <code>internal/garmin</code> (shared parsers), <code>cmd/weather-api/main.go</code> (endpoints).
+      Diagrams rendered client-side via Mermaid (CDN).
+    </footer>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      securityLevel: 'loose',
+      flowchart: { useMaxWidth: true, htmlLabels: true },
+      sequence: { useMaxWidth: true, wrap: true }
+    });
+  </script>
+</body>
+</html>
