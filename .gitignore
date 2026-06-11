@@ -10,3 +10,6 @@
 
 # HAR captures — contain session cookies/tokens, never commit
 /*.har
+
+# Environment / secrets — never commit
+.env
