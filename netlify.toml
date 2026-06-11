@@ -3,6 +3,13 @@
   publish   = "public"
   functions = "functions"
 
+  # The Garmin page test fixtures are captured third-party HTML and carry Garmin's
+  # own Google Maps / Cloudflare tokens (not ours). Exclude them from secret scanning
+  # so a fresh real capture doesn't fail the build. Our own secrets live only in env
+  # vars and are still scanned everywhere else.
+  [build.environment]
+    SECRETS_SCAN_OMIT_PATHS = "cmd/bot/testdata/*.html"
+
 [functions."weather-bot"]
   schedule = "* * * * *"
 
