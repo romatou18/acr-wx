@@ -137,8 +137,8 @@ rebuilds a session purely from persisted `reply_host` + `ext_id` + `guid` +
 | Function | Role |
 |---|---|
 | `fetchInReachPage` | GET shortlink once → `{HTML, FinalURL, Host, ExtID}` |
-| `parseShortlinkCoords` | recover sender lat/lon from page `Locations[]` |
-| `parseGarminReplyFields` | scrape `Guid` + `MessageId` hidden inputs |
+| `parseShortlinkCoords` | recover sender lat/lon from page `Locations[]` (delegates to `internal/garmin.ParseShortlinkCoords`) |
+| `parseGarminReplyFields` | scrape `Guid` + `MessageId` hidden inputs (delegates to `internal/garmin.ParseReplyFields`) |
 | `newGarminSessionFromPage` | build a `GarminSession` from a fetched page |
 | `InitGarminSession` | shortlink → session (wrapper: fetch + build) |
 | `InitGarminSessionFromState` | rebuild session from Turso state (no network) |
@@ -172,6 +172,20 @@ GARMIN_TEST_SHORTLINK="https://inreachlink.com/<token>" \
 ```
 Because the cron would burn the single-use link first, **suspend processing** while you
 send the device message and grab the link (see §9).
+
+**On-demand parse test (upload a real page).** To confirm the live Garmin layout still
+parses without committing/rebuilding, save a real message page as HTML and upload it:
+
+- Web UI: `https://acr-wx.netlify.app/garmin-test.html` — pick the saved `.html`, enter
+  `LOGS_KEY`, **Run parse test** → PASS/FAIL with the extracted `Guid`/`MessageId`/coords.
+- API: `curl --data-binary @page.html "https://acr-wx.netlify.app/garmin-parse-test?key=<LOGS_KEY>"`
+
+Both call `internal/garmin.AnalyzePage`, the **same parser the bot uses**
+(`ParseReplyFields` / `ParseShortlinkCoords`, shared by `cmd/bot` and `cmd/weather-api`),
+so a PASS means the bot can still reply and a FAIL (e.g. "Guid hidden input not found")
+means Garmin changed the page. The uploaded HTML is parsed in memory only — never stored.
+`ok` is true when Guid+MessageId are found; coords are optional (app messages report no
+fix). Unit-tested in `internal/garmin/garmin_test.go`.
 
 ## 6. Observability — watching it live
 

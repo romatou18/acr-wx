@@ -22,6 +22,7 @@ import (
 	_ "time/tzdata"
 
 	"acr-wx/internal/forecast"
+	"acr-wx/internal/garmin"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -128,15 +129,10 @@ func fetchInReachPage(shortlink string) (*inReachPage, error) {
 
 // parseGarminReplyFields pulls the reply target out of the message page. Garmin
 // exposes it as hidden inputs: <input name="Guid" value="..."> and
-// <input name="MessageId" value="...">.
+// <input name="MessageId" value="...">. The implementation lives in
+// internal/garmin so the weather-api parse-test endpoint exercises the same code.
 func parseGarminReplyFields(html string) (guid, messageId string) {
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return "", ""
-	}
-	guid, _ = doc.Find(`input[name="Guid"]`).Attr("value")
-	messageId, _ = doc.Find(`input[name="MessageId"]`).Attr("value")
-	return strings.TrimSpace(guid), strings.TrimSpace(messageId)
+	return garmin.ParseReplyFields(html)
 }
 
 // newGarminSessionFromPage builds a reply session from an already-fetched
@@ -203,27 +199,10 @@ func InitGarminSessionFromState(s SessionState) (*GarminSession, error) {
 //	"Locations":[{ ... "Latitude":<lat>,"Longitude":<lon> ... }]
 //
 // When the email body has no coordinates we follow the shortlink and recover
-// them here. Messages sent with no GPS fix report 0,0 and yield ok=false.
-var reShortlinkLatLon = regexp.MustCompile(`"Latitude":\s*(-?\d+(?:\.\d+)?)\s*,\s*"Longitude":\s*(-?\d+(?:\.\d+)?)`)
-
-// parseShortlinkCoords returns the first valid, non-zero coordinate pair found
-// in the inReach message page HTML. ok=false means no usable fix was present.
+// them here. Messages sent with no GPS fix report 0,0 and yield ok=false. The
+// implementation lives in internal/garmin (shared with the parse-test endpoint).
 func parseShortlinkCoords(pageHTML string) (lat, lon float64, ok bool) {
-	for _, m := range reShortlinkLatLon.FindAllStringSubmatch(pageHTML, -1) {
-		la, e1 := strconv.ParseFloat(m[1], 64)
-		lo, e2 := strconv.ParseFloat(m[2], 64)
-		if e1 != nil || e2 != nil {
-			continue
-		}
-		if la == 0 && lo == 0 {
-			continue // no GPS fix
-		}
-		if la < -90 || la > 90 || lo < -180 || lo > 180 {
-			continue
-		}
-		return la, lo, true
-	}
-	return 0, 0, false
+	return garmin.ParseShortlinkCoords(pageHTML)
 }
 
 // garminReplyBody is the JSON payload posted to /TextMessage/TxtMsg, captured

@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,6 +17,7 @@ import (
 	_ "time/tzdata"
 
 	"acr-wx/internal/forecast"
+	"acr-wx/internal/garmin"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -41,6 +44,13 @@ func handler(_ context.Context, req events.APIGatewayProxyRequest) (events.APIGa
 	}
 	if path == "/weather-api/resume" || path == "/resume" {
 		return handleResume(req)
+	}
+
+	// POST /garmin-parse-test  — upload a saved explore.garmin.com message page;
+	// parse it with the bot's own parsers and report whether it still yields a
+	// usable reply target (Guid/MessageId/coords).
+	if path == "/weather-api/garmin-parse-test" || path == "/garmin-parse-test" {
+		return handleGarminParseTest(req)
 	}
 
 	// GET /weather-api/all  — report for every registered park
@@ -260,6 +270,39 @@ func handleResume(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResp
 	return jsonResp(200, `{"resumed":true}`), nil
 }
 
+// handleGarminParseTest accepts a saved explore.garmin.com message page as the
+// POST body and runs the bot's own parsers (internal/garmin) over it, returning
+// a JSON verdict: did it still yield the Guid/MessageId reply target (and coords)?
+// This is the on-demand "is the live Garmin layout still parseable?" check — a
+// FAIL means Garmin changed the page and device replies would break. The uploaded
+// HTML is parsed in memory only and never stored. Guarded by LOGS_KEY.
+func handleGarminParseTest(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if key := os.Getenv("LOGS_KEY"); key != "" && req.QueryStringParameters["key"] != key {
+		return jsonResp(401, `{"error":"unauthorized — set ?key=<LOGS_KEY>"}`), nil
+	}
+
+	body := req.Body
+	if req.IsBase64Encoded {
+		decoded, err := base64.StdEncoding.DecodeString(body)
+		if err != nil {
+			return jsonResp(400, fmt.Sprintf(`{"error":%q}`, "could not base64-decode body: "+err.Error())), nil
+		}
+		body = string(decoded)
+	}
+	if strings.TrimSpace(body) == "" {
+		return jsonResp(400, `{"error":"empty body — POST the saved Garmin message page HTML as the request body"}`), nil
+	}
+
+	report := garmin.AnalyzePage(body)
+	b, err := json.Marshal(report)
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "marshal: "+err.Error())), nil
+	}
+	log.Printf("🧪 garmin-parse-test: %d bytes → ok=%v guid=%v msgId=%v coords=%v",
+		report.Bytes, report.OK, report.GuidFound, report.MessageIdFound, report.CoordsFound)
+	return jsonResp(200, string(b)), nil
+}
+
 // ensurePauseColumn tolerates a fresh DB (or one created before paused_until
 // existed): create the table/row if missing and add the column idempotently. The
 // bot's ensureSchema normally owns the schema, but the API may be hit first.
@@ -327,8 +370,15 @@ func serverError(msg string) events.APIGatewayProxyResponse {
 func main() {
 	if os.Getenv("LOCAL_WEATHER_API") == "1" {
 		handle := func(w http.ResponseWriter, r *http.Request) {
+			var reqBody string
+			if r.Body != nil {
+				b, _ := io.ReadAll(r.Body)
+				reqBody = string(b)
+			}
 			resp, _ := handler(r.Context(), events.APIGatewayProxyRequest{
-				Path: r.URL.Path,
+				Path:       r.URL.Path,
+				HTTPMethod: r.Method,
+				Body:       reqBody,
 				QueryStringParameters: map[string]string{
 					"lat":   r.URL.Query().Get("lat"),
 					"lon":   r.URL.Query().Get("lon"),
@@ -350,6 +400,7 @@ func main() {
 		http.HandleFunc("/debug", handle)
 		http.HandleFunc("/pause", handle)
 		http.HandleFunc("/resume", handle)
+		http.HandleFunc("/garmin-parse-test", handle)
 		http.HandleFunc("/weather-api", handle)
 		// Serve the static pages (index.html, debug.html) so the viewer works locally.
 		http.Handle("/", http.FileServer(http.Dir("public")))

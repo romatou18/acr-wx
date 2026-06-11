@@ -48,3 +48,10 @@
   to   = "/.netlify/functions/weather-api/resume"
   status = 200
   force = true
+
+# Upload a saved Garmin message page to validate the bot's parser still works.
+[[redirects]]
+  from = "/garmin-parse-test"
+  to   = "/.netlify/functions/weather-api/garmin-parse-test"
+  status = 200
+  force = true
