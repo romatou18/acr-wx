@@ -13,3 +13,7 @@
 
 # Environment / secrets — never commit
 .env
+
+# Raw Garmin page captures (scratch; hold real session tokens + saved _files/).
+# The sanitized golden fixture lives at cmd/bot/testdata/ and IS committed.
+/testdata/

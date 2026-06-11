@@ -1,29 +1,657 @@
-<!--
-  GOLDEN FIXTURE for the offline Garmin reply-loop test (garmin_reply_loop_test.go).
-
-  This is a SANITIZED stand-in for a real explore.garmin.com message page. It mirrors
-  the layout the bot scrapes: the Guid/MessageId hidden inputs and the "Locations":[...]
-  JSON carrying the sender's fix.
-
-  >>> Replace this with a REAL captured page (sanitized) when you have one — see
-      GARMIN.md §7. Keep the test markers below so the test stays valid:
-        - Guid value      = TEST-guid-0000-0000-000000000001
-        - MessageId value = 999000111
-        - Locations fix   = -43.730000, 170.090000  (Aoraki / Mt Cook)
-      A real page is better at catching Garmin layout changes; never commit a live token.
--->
 <!DOCTYPE html>
-<html>
-<head><title>inReach Message</title></head>
-<body>
-  <form id="replyForm" method="post" action="/TextMessage/TxtMsg">
-    <input data-val="true" data-val-required="The Guid field is required." id="Guid" name="Guid" type="hidden" value="TEST-guid-0000-0000-000000000001">
-    <input data-val="true" data-val-number="The field MessageId must be a number." data-val-required="The MessageId field is required." id="MessageId" name="MessageId" type="hidden" value="999000111">
-    <textarea name="ReplyMessage"></textarea>
-    <button type="submit">Send</button>
-  </form>
-  <script>
-    var mapModel = {"FirstName":"Test","LastName":"Device","Locations":[{"FalseBreak":null,"Latitude":-43.730000,"Longitude":170.090000,"Altitude":3724}]};
-  </script>
-</body>
-</html>
+<!-- saved from url=(0079)https://aus.explore.garmin.com/textmessage/txtmsg?extId=TESTEXT -->
+<html lang="en-US" dir="ltr" xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+	
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<meta name="apple-mobile-web-app-capable" content="yes">
+	<meta name="viewport" content="width=device-width">
+
+	<title>inReach Message from Christchurch ACR 01</title>
+
+	<link href="./inReach Message from Christchurch ACR 01_files/main-ddbea754.css" rel="stylesheet">
+
+	<script src="./inReach Message from Christchurch ACR 01_files/jquery.js.download"></script>
+
+	<script src="./inReach Message from Christchurch ACR 01_files/bootstrap.js.download"></script>
+
+	<script src="./inReach Message from Christchurch ACR 01_files/requirejs.js.download"></script>
+
+
+
+<script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="geodesy/vector3d" src="./inReach Message from Christchurch ACR 01_files/vector3d.js.download"></script><script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="ui/cookies" src="./inReach Message from Christchurch ACR 01_files/cookies.js.download"></script><script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="es6-promise.min" src="./inReach Message from Christchurch ACR 01_files/es6-promise.min.js.download"></script><script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="ui/commonConfig" src="./inReach Message from Christchurch ACR 01_files/commonConfig.js.download"></script><script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="map/tracksService" src="./inReach Message from Christchurch ACR 01_files/tracksService.js.download"></script><script type="text/javascript" charset="utf-8" async="" data-requirecontext="_" data-requiremodule="leaflet" src="./inReach Message from Christchurch ACR 01_files/leaflet.js.download"></script></head><body class="ex-page_textMessage-full" style="height: 100%; width: 100%; margin: 0;"><input id="stringsResourceCont-810e46f1-df89-4f75-bc30-575a34b00cd7" name="stringsResourceCont" type="hidden" value="TextMessage">
+<input id="stringsResourceCulture-1023b972-330e-4f76-84eb-a554ea6856b0" name="stringsResourceCulture" type="hidden" value="en-US">
+<input id="stringsResourceCurrencyCode-87e2467b-d011-4a89-8ac6-6e794d17930c" name="stringsResourceCurrencyCode" type="hidden" value="USD">
+<input id="stringsResourceCurrencySymbol-a559a7d3-a7c1-48bf-b3fa-3854b225630d" name="stringsResourceCurrencySymbol" type="hidden" value="$">
+<input id="stringsResourceOwnerId-4d85e6d2-6a0d-42af-829e-a1a75a5b41d3" name="stringsResourceOwnerId" type="hidden" value="1">
+<input id="stringsResourceUrl-fb7f01f3-64a3-4ef0-a0bb-ad3ca58e6628" name="stringsResourceUrl" type="hidden" value="/Resources?cont=TextMessage&amp;culture=en-US&amp;currencyCode=USD&amp;extrasNeeded=map&amp;ownerId=1&amp;v=1.0.154.1157">
+
+<script>
+	require(['moment'], function (moment) {
+		$(document).ready(function () {
+			$('.iso-to-local-date').each(function (idx, elem) {
+				var isoDate = $(elem).html();
+				var momentDate = moment(isoDate);
+
+				$(elem).html(momentDate.format('L'));
+			});
+		});
+	});
+</script>
+
+
+	<script>
+		if (document.location.href.toLowerCase().indexOf('.delorme.com') > -1) {
+			var url = document.location.href.toLowerCase().replace(/.*?:\/\//g, "");
+
+			if (!(url.indexOf('share') > -1)) {
+				var actionAndQuery = '';
+
+				if (url.indexOf('/') > -1) actionAndQuery = url.substring(url.indexOf('/'), url.length);
+				window.location = 'https://inreach.garmin.com' + actionAndQuery;
+			}
+		}
+	</script>
+
+<script type="text/javascript">
+	if (define !== undefined && requirejs !== undefined && requirejs.config !== undefined) {
+		var paths = {
+			leaflet: 'leaflet13/leaflet',
+			leafletLayerDeferred: 'leaflet/Layer.Deferred'
+		};
+		if (!jQuery) {
+			paths.jquery = 'jquery-1.7.2';
+		} else {
+			define('jquery', [], function () { return jQuery; });
+		}
+
+		requirejs.config({
+			baseUrl: '/Scripts/requirejs/',
+			shim: {
+				'jquery': {
+					exports: 'jQuery'
+				},
+				'leaflet': {
+					exports: 'L'
+				},
+				'leafletLayerDeferred': {
+					deps: ['leaflet']
+				}
+			},
+			paths: paths,
+		});
+	}
+</script>
+
+	<script type="text/javascript">
+    var UseRackspaceForTopo = false;
+    var TopoURL = 'https://topocache20.azureedge.net/';
+    var RoadURL = '';
+    var AerialU = '';
+    var NO_AUTO_LOAD = true;
+    var NO_POP_BUTTONS = true;
+    var NO_EXPAND = true;
+        require(['map-config'], function (mapConfig) {
+        mapConfig.configure({
+            Archived : false,
+            lat : 42,
+            lon : -73,
+            TopoURL : 'https://topocache20.azureedge.net/',
+            zoom: 2,
+            isEmptyLocation : true,
+            replyable : true,
+            UseRackspaceForTopo : false,
+            RefreshInt : 0,
+            units : 1,
+            coords : "DecimalDegrees",
+            data: {"FalseBreak":null,"Latitude":-43.730000,"Longitude":170.090000,"Altitude":0.00,"GroundVelocity":0.0000,"C":0,"LocationDate":"\/Date(1781144977353)\/","ServiceType":3,"LowPower":null,"EmergencyState":0,"TrailId":0,"MessageId":999000111,"Text":"UPDATE","EventLogType":13,"MessageToList":"bot@example.com","HighRes":0,"ModifiedTrailId":null},
+            FirstName: "Christchurch",
+            LastName: "ACR 01",
+            Google: true,
+            GoogleURL: "https://maps.google.com/maps/api/js?v=3\u0026channel=explore\u0026key=AIzaSyCBxomNjVMtCe6EKVRWws38QMHjDIsp0UU",
+            HereBaseURL: "",
+            HereAerialURL: "",
+            HereMapCountryCode: "",
+            mobile: false,
+            User : {"Id":682879,"EncryptedUserId":null,"AssignedDeviceId":null,"HasData":false,"MatchesCurrentFilter":true,"InField":false,"FirstName":"Christchurch","LastName":"ACR 01","TrackingStatus":false,"Locations":[{"FalseBreak":null,"Latitude":-43.730000,"Longitude":170.090000,"Altitude":0.00,"GroundVelocity":0.00,"C":0,"LocationDate":"\/Date(1781144977353)\/","ServiceType":3,"LowPower":null,"EmergencyState":null,"TrailId":0,"MessageId":999000111,"Text":"UPDATE","EventLogType":null,"MessageToList":null,"HighRes":0,"ModifiedTrailId":null}],"ColorCode":"#1D6111","GroupID":0,"LastSeenTime":null,"MaxHighDetailId":null,"ShowOnMap":false,"ShowOnMapShare":false,"CanSendToDevice":true,"EnableLocate":false,"EnableMessage":false,"AirDropStatus":null,"Target":null,"LocateRequestPending":false,"TrackRequestPending":false,"Scanner":null,"InSOS":false,"ShowSOSInMapshare":false,"EnableMapShare":false,"HasAnySOSOnlyDevices":false,"HasAllSOSOnlyDevices":false,"MapDisplayName":"LSAR-CHC-01","UpdateRowVersion":null},
+            Env:  "PROD",
+            IpIsLimitedCountry: false,
+            InMapShare: true,
+            InMessageReply: true,
+                
+                OSMURL: "https://osm21.azureedge.net/",
+                
+                    });
+    });
+	</script>
+<!-- Facebook Open Graph Tags
+https://developers.facebook.com/docs/opengraph/howtos/maximizing-distribution-media-content/#tags
+<meta property="og:title" content="" />
+<meta property="og:type" content="article" />
+<meta property="og:url" content="" />
+<meta property="og:description" content="" />-->
+<meta property="og:image" content="/Content/images/EarthaIconFacebook-200x200.jpg">
+
+	<script src="./inReach Message from Christchurch ACR 01_files/txtReplyFull.js.download"></script>
+
+
+	<style>
+		.logo {
+			top: 13px;
+			left: 9px;
+		}
+
+		div .validation-summary-errors ul {
+			list-style: none;
+			margin-top: 75px;
+		}
+
+		.validation-summary-errors {
+			font-weight: normal !important;
+			color: '#d60000' !important;
+		}
+	</style>
+	<meta property="og:image" content="https://aus.explore.garmin.com/Content/images/Explore_OpenGraph.png">
+	<meta property="og:title" content="Garmin Explore™">
+	<meta property="og:description" content="Manage your Garmin Explore or inReach account. With Explore and inReach, you can communicate, map, track, and share your trek from anywhere on Earth.">
+
+
+	<nav id="header">
+			<a href="https://aus.explore.garmin.com/Home/Index" class="ex-header-logo-wrapper " aria-label="Explore - Go to home page">
+		<img height="30" width="170" src="./inReach Message from Christchurch ACR 01_files/Explore_Orange.svg" class="logo ex-header_logo" alt="Explore">
+		<img height="36" src="./inReach Message from Christchurch ACR 01_files/Explore_Small.svg" class="logo ex-header_logo_small" alt="Explore">
+	</a>
+
+		<div id="logindisplay" class="ex-logonPartial">
+
+<div class="logonPartialContainer ex-logonPartial_container">
+	<div id="logon-icon-row" class="ex-logonPartial_row">
+		<div id="lone-lang-picker-container">
+			<label for="ex-languagePicker" class="sr-only">Select a Language</label>
+			<select id="ex-languagePicker" class="language-picker form-control form-control-sm" onchange="chooseLanguage(event)"><option value="en-US">‭English (U.S.)</option><option value="en-CA">‭English (Canada)</option><option value="en-GB">‭English (U.K.)</option><option value="en-IE">‭English (Ireland)</option><option value="en-ZA">‭English (South Africa)</option><option value="en-AU">‭English (Australia)</option><option value="ms-MY">Bahasa Malaysia</option><option value="id-ID">Bahasa Indonesia</option><option value="bg-BG">Български</option><option value="cs-CZ">Čeština</option><option value="da-DK">Dansk</option><option value="de-DE">‭Deutsch (Deutschland)</option><option value="de-AT">‭Deutsch (Österreich)</option><option value="de-CH">‭Deutsch (Schweiz)</option><option value="el-GR">‭Ελληνικά</option><option value="es-AR">‭Español (Argentina)</option><option value="es-CL">‭Español (Chile)</option><option value="es-MX">‭Español (México)</option><option value="es-ES">‭Español (España)</option><option value="es-US">‭Español (Estados Unidos)</option><option value="fr-BE">‭Français (Belgique)</option><option value="fr-CA">‭Français (Canada)</option><option value="fr-FR">‭Français (France)</option><option value="fr-CH">‭Français (Suisse)</option><option value="hr-HR">‭Hrvatski</option><option value="it-IT">‭Italiano (Italia)</option><option value="it-CH">‭Italiano (Svizzera)</option><option value="hu-HU">‭Magyar</option><option value="nl-BE">‭Nederlands (België)</option><option value="nl-NL">‭Nederlands (Nederland)</option><option value="nb-NO">‭Norsk (bokmål)</option><option value="pl-PL">Polski</option><option value="pt-BR">‭Português (Brasil)</option><option value="pt-PT">‭Português (Portugal)</option><option value="ru-RU">Русский</option><option value="fi-FI">Suomi</option><option value="sk-SK">Slovenčina</option><option value="sl-SI">Slovenščina</option><option value="sv-SE">Svenska</option><option value="vi-VN">Tiếng Việt</option><option value="tr-TR">Türkçe</option><option value="zh-CN">简体中文</option><option value="th-TH">ไทย</option><option value="ja-JP">日本語</option><option value="ko-KR">한국어</option><option value="zh-TW">正體中文</option></select>
+		</div>
+	</div>
+
+
+	<div id="legalInfoDialog" class="modal hide fade" role="dialog" style="display: none;text-align:left;">
+		<div class="modal-dialog modal-dialog-centered" role="document">
+			<div class="modal-content">
+				<div class="modal-header">
+					<div class="modal-title">
+						<h5>Legal Information</h5>
+					</div>
+				</div>
+				<div class="modal-body">
+										<a href="https://www.garmin.com/en-US/legal/explore-data-sources/" target="_blank">inReach Map Data Sources</a>
+					<br>
+					<br>
+					<div>
+						<h5>Site Version</h5>
+						<div style="font-size: 10px;">1.0.154.1157</div>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button id="legalCloseBtn" data-dismiss="modal" class="btn btn-outline-dark">
+						Close
+						</button>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
+	<script src="./inReach Message from Christchurch ACR 01_files/logOnPartialPage.js.download"></script>
+
+	<script type="text/javascript">
+	function sendAnalyticsEvent(data) {
+		if (window?.utag?.link) {
+			if (data) {
+				window.utag.link(data);
+			} else {
+				console.warn('No data passed to sendAnalyticsEvent');
+			}
+		} else {
+			console.warn('window.utag.link is undefined');
+		}
+	};
+
+	function sendAnalyticsPageView(data) {
+		if (window?.utag?.view) {
+			if (data) {
+				window.utag.view(data);
+			} else {
+				console.warn('No data passed to sendAnalyticsPageView');
+			}
+		} else {
+			console.warn('window.utag.view is undefined');
+		}
+	};
+
+	// Legal modal focus trapping
+	function setupLegalModalFocusTrapping() {
+		$('#legalInfoDialog').on('shown.bs.modal', function () {
+			const modal = this;
+
+			// Focus first focusable element
+			const firstFocusable = modal.querySelector('a, button, [tabindex]:not([tabindex="-1"])');
+			if (firstFocusable) {
+				firstFocusable.focus();
+			}
+
+			// Handle keydown for focus trapping
+			function handleModalKeyDown(event) {
+				if (event.key === 'Escape') {
+					$('#legalInfoDialog').modal('hide');
+					return;
+				}
+
+				if (event.key === 'Tab') {
+					const focusableElements = modal.querySelectorAll('a, button, [tabindex]:not([tabindex="-1"])');
+					const firstElement = focusableElements[0];
+					const lastElement = focusableElements[focusableElements.length - 1];
+
+					if (event.shiftKey) {
+						// Shift + Tab (backward)
+						if (document.activeElement === firstElement) {
+							event.preventDefault();
+							lastElement.focus();
+						}
+					} else {
+						// Tab (forward)
+						if (document.activeElement === lastElement) {
+							event.preventDefault();
+							firstElement.focus();
+						}
+					}
+				}
+			}
+
+			document.addEventListener('keydown', handleModalKeyDown);
+
+			// Clean up event listener when modal closes
+			$('#legalInfoDialog').one('hidden.bs.modal', function () {
+				document.removeEventListener('keydown', handleModalKeyDown);
+			});
+		});
+	}
+
+	require(['commonWidgetConfig', 'commonWidget'], function (commonWidgetConfig, commonWidget) {
+		commonWidgetConfig.configure({
+			allLangs:[{"CultureCode":"en-US","Name":"‭English (U.S.)","Current":false},{"CultureCode":"en-CA","Name":"‭English (Canada)","Current":false},{"CultureCode":"en-GB","Name":"‭English (U.K.)","Current":false},{"CultureCode":"en-IE","Name":"‭English (Ireland)","Current":false},{"CultureCode":"en-ZA","Name":"‭English (South Africa)","Current":false},{"CultureCode":"en-AU","Name":"‭English (Australia)","Current":false},{"CultureCode":"ms-MY","Name":"Bahasa Malaysia","Current":false},{"CultureCode":"id-ID","Name":"Bahasa Indonesia","Current":false},{"CultureCode":"bg-BG","Name":"Български","Current":false},{"CultureCode":"cs-CZ","Name":"Čeština","Current":false},{"CultureCode":"da-DK","Name":"Dansk","Current":false},{"CultureCode":"de-DE","Name":"‭Deutsch (Deutschland)","Current":false},{"CultureCode":"de-AT","Name":"‭Deutsch (Österreich)","Current":false},{"CultureCode":"de-CH","Name":"‭Deutsch (Schweiz)","Current":false},{"CultureCode":"el-GR","Name":"‭Ελληνικά","Current":false},{"CultureCode":"es-AR","Name":"‭Español (Argentina)","Current":false},{"CultureCode":"es-CL","Name":"‭Español (Chile)","Current":false},{"CultureCode":"es-MX","Name":"‭Español (México)","Current":false},{"CultureCode":"es-ES","Name":"‭Español (España)","Current":false},{"CultureCode":"es-US","Name":"‭Español (Estados Unidos)","Current":false},{"CultureCode":"fr-BE","Name":"‭Français (Belgique)","Current":false},{"CultureCode":"fr-CA","Name":"‭Français (Canada)","Current":false},{"CultureCode":"fr-FR","Name":"‭Français (France)","Current":false},{"CultureCode":"fr-CH","Name":"‭Français (Suisse)","Current":false},{"CultureCode":"hr-HR","Name":"‭Hrvatski","Current":false},{"CultureCode":"it-IT","Name":"‭Italiano (Italia)","Current":false},{"CultureCode":"it-CH","Name":"‭Italiano (Svizzera)","Current":false},{"CultureCode":"hu-HU","Name":"‭Magyar","Current":false},{"CultureCode":"nl-BE","Name":"‭Nederlands (België)","Current":false},{"CultureCode":"nl-NL","Name":"‭Nederlands (Nederland)","Current":false},{"CultureCode":"nb-NO","Name":"‭Norsk (bokmål)","Current":false},{"CultureCode":"pl-PL","Name":"Polski","Current":false},{"CultureCode":"pt-BR","Name":"‭Português (Brasil)","Current":false},{"CultureCode":"pt-PT","Name":"‭Português (Portugal)","Current":false},{"CultureCode":"ru-RU","Name":"Русский","Current":false},{"CultureCode":"fi-FI","Name":"Suomi","Current":false},{"CultureCode":"sk-SK","Name":"Slovenčina","Current":false},{"CultureCode":"sl-SI","Name":"Slovenščina","Current":false},{"CultureCode":"sv-SE","Name":"Svenska","Current":false},{"CultureCode":"vi-VN","Name":"Tiếng Việt","Current":false},{"CultureCode":"tr-TR","Name":"Türkçe","Current":false},{"CultureCode":"zh-CN","Name":"简体中文","Current":false},{"CultureCode":"th-TH","Name":"ไทย","Current":false},{"CultureCode":"ja-JP","Name":"日本語","Current":false},{"CultureCode":"ko-KR","Name":"한국어","Current":false},{"CultureCode":"zh-TW","Name":"正體中文","Current":false}],
+			currentLang: "en-US",
+			isAuthenticated: false,
+			airdrop: false,
+			isShadmin: false,
+			legalInfoDialogTitle: 'Legal Information',
+			legalInfoDialogCloseText: 'Close'
+		});
+
+		commonWidget.completeMenu();
+		setupLegalModalFocusTrapping();
+	});
+
+	</script>
+</div>
+			<h1 class="headerText mb-0">
+				Christchurch ACR 01's Message and Location
+			</h1>
+	</nav>
+	<main id="divMain">
+			<div id="nopoints" style="display: none;">
+				<div>
+					<strong>Location not available for this message.</strong>
+				</div>
+			</div>
+			<div id="map" style="width: 100%; height: 670px;" class="leaflet-container leaflet-touch leaflet-retina leaflet-fade-anim leaflet-grab leaflet-touch-drag leaflet-touch-zoom" tabindex="0">
+			<div class="leaflet-pane leaflet-map-pane" style="transform: translate3d(-278px, 0px, 0px);"><div class="leaflet-pane leaflet-tile-pane"><div class="leaflet-layer " style="z-index: 1; opacity: 1;"><div class="leaflet-tile-container leaflet-zoom-animated" style="z-index: 20; transform: translate3d(0px, 0px, 0px) scale(1);"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000001.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(712px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000001(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(712px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(456px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(968px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000001(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(712px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(456px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(968px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(456px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(968px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(200px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1224px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(200px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1224px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(200px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000003(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1224px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(-56px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000.jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1480px, 211px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(-56px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000(1).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1480px, -45px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000002(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(-56px, 467px, 0px); opacity: 1;"><img alt="" role="presentation" src="./inReach Message from Christchurch ACR 01_files/C00000000(2).jpg" class="leaflet-tile leaflet-tile-loaded" style="width: 256px; height: 256px; transform: translate3d(1480px, 467px, 0px); opacity: 1;"></div></div></div><div class="leaflet-pane leaflet-shadow-pane"></div><div class="leaflet-pane leaflet-overlay-pane"></div><div class="leaflet-pane leaflet-marker-pane"></div><div class="leaflet-pane leaflet-tooltip-pane"></div><div class="leaflet-pane leaflet-popup-pane"></div><div class="leaflet-proxy leaflet-zoom-animated" style="transform: translate3d(305px, 380px, 0px) scale(2);"></div></div><div class="leaflet-control-container"><div class="leaflet-top leaflet-left"><div class="customzoomcontrol noprint leaflet-control"><div id="zoominbutton" role="button" aria-label="Zoom Map In" unselectable="on" tabindex="0" title="Zoom Map In" class="mapControlButton" style="display:block !important"><span class="glyphicon glyphicon-plus"></span></div><div id="zoomoutbutton" role="button" aria-label="Zoom Map Out" unselectable="on" tabindex="0" title="Zoom Map Out" class="mapControlButton" style="display:block !important"><span class="glyphicon glyphicon-minus"></span></div><div id="centerHeadcrumbButton" role="button" aria-label="Center the selected user on the map." unselectable="on" tabindex="0" title="Center the selected user on the map." class="mapControlButton disabled" style="display:block !important"><a id="centerHeadcrumbIcon"></a></div></div><div class="leaflet-control-layers leaflet-control" aria-haspopup="true" id="mapBaseLayerControl"><a class="leaflet-control-layers-toggle" href="https://aus.explore.garmin.com/textmessage/txtmsg?extId=TESTEXT#" title="Layers"></a><form class="leaflet-control-layers-list"><div class="leaflet-control-layers-base"><label><div><input type="radio" class="leaflet-control-layers-selector" name="leaflet-base-layers" checked="checked"><span> Topo</span></div></label><label><div><input type="radio" class="leaflet-control-layers-selector" name="leaflet-base-layers"><span> TopoActive</span></div></label><label><div><input type="radio" class="leaflet-control-layers-selector" name="leaflet-base-layers"><span> Aerial</span></div></label><label><div><input type="radio" class="leaflet-control-layers-selector" name="leaflet-base-layers"><span> Road</span></div></label></div><div class="leaflet-control-layers-separator" style="display: none;"></div><div class="leaflet-control-layers-overlays"></div></form></div></div><div class="leaflet-top leaflet-right"></div><div class="leaflet-bottom leaflet-left"><div class="leaflet-control-scale leaflet-control"><div class="leaflet-control-scale-line" style="width: 69px;">2000 km</div></div><div class="leaflet-control-attribution leaflet-control"><a href="http://leafletjs.com/" title="A JS library for interactive maps">Leaflet</a> | © Garmin Ltd. or its subsidiaries.</div></div><div class="leaflet-bottom leaflet-right"></div></div></div>
+					<div id="replyContainer" style="left: 556px;">
+						<input data-val="true" data-val-number="The field MessageId must be a number." data-val-required="The MessageId field is required." id="MessageId" name="MessageId" type="hidden" value="999000111">
+						<input data-val="true" data-val-required="The Guid field is required." id="Guid" name="Guid" type="hidden" value="TEST-guid-0000-0000-000000000001">
+
+
+						<div id="replyContainerHeader" class="replyHeader">
+							<button class="toggleReply btn btn-nostyle">
+								<span class="glyphicon glyphicon-chevron-down">
+									<span class="sr-only">Toggle Message Reply</span>
+								</span>
+							</button>
+							<strong>Reply To Christchurch ACR 01</strong>
+						</div>
+						<div class="replyBody">
+							<div data-bind="visible: !successMsg()">
+									<p>
+										<strong>Christchurch ACR 01's message</strong><br>
+										</p><div class="message-text">UPDATE</div>
+									<p></p>
+									<br>
+								<div class="form-group">
+									<label for="ReplyAddress"><strong>Your Email or Mobile Phone:</strong></label><br>
+									<span data-bind="visible: sendMessageFromFormatError() != null, text: sendMessageFromFormatError" class="field-validation-error" style="display: none;"></span>
+										<input type="email" id="ReplyAddress" class="form-control" style="width: 99%;" value="bot@example.com" data-bind="value: from, valueUpdate:&#39;keyup&#39;">
+										<small class="form-text text-muted">Use full number, starting with “+” and country code. Use “+1” for US numbers.</small>
+								</div>
+								<div class="form-group">
+									<label for="ReplyMessage"><strong>Your Reply:</strong></label>
+									<span style="float: right;" class="countdown" data-bind="html: remainingMessage">160 Characters Remaining</span>
+									<br>
+									<textarea id="ReplyMessage" class="form-control" maxlength="160" style="width: 99%; height: 8.5rem; resize: none;" data-bind="value: message, valueUpdate:&#39;keyup&#39;"></textarea>
+								</div>
+								<div id="errorMsg" data-bind="visible: errorMsg" style="float: left; display: none;">There was an error sending your message.</div>
+								</div>
+								<div id="successMsg" data-bind="visible: successMsg" style="float: left; color: green; display: none; margin-top:5px">Message sent.</div>
+									<div style="float: right; padding-bottom: 10px;">
+										<img alt="Sending" data-bind="visible:sending" src="./inReach Message from Christchurch ACR 01_files/ajax-loader-spin.gif" style="display: none;">&nbsp;
+										<button id="sendBtn" class="btn btn-sm btn-outline-dark disabled" data-bind="css: {disabled : !formValid()}, text: buttonText, click: successMsg() ? resetReply() : sendReply()">Send Message</button>
+									</div>
+								</div>
+							</div>
+
+<div id="inreach-right-ad-container" role="article" style="width: 245px;">
+    <div id="inreach-right-ad" role="presentation">
+        <div id="inreach-right-ad-color-splash"></div>
+        <button id="inreach-right-ad-close" role="button" title="Close">×</button>
+        <div id="inreach-right-ad-column" role="article">
+            <div id="inreach-right-ad-text">Powered by inReach® Satellite Technology</div>
+            <a id="inreach-right-ad-learn-more" href="https://garmin.com/en-US/inreach" target="_blank" class="btn btn-light">Learn More</a>
+        </div>
+			<img id="inreach-right-ad-img" role="img" class="sixtySixi" src="./inReach Message from Christchurch ACR 01_files/GPSMap66iMapShare.png" alt="Learn More">
+    </div>
+</div>
+
+<script>
+    require(["ui/cookies"], function (cookies) {
+        let ad_key = "GarminExploreMap::ClosedAd";
+
+        function showAd() {
+            $('#inreach-right-ad-container').width(245);
+        }
+
+        function hideAd() {
+            $('#inreach-right-ad-container').width(0);
+            cookies.set(ad_key, "True", { expireDays: 7 })
+        }
+
+        $('#inreach-right-ad-close').click(hideAd)
+
+        $(document).ready(function () {
+            if (!cookies.get(ad_key))
+                setTimeout(showAd, 2000);
+        });
+    });
+</script>
+
+	</main>
+
+	<div id="divPopupTemplateContainer" style="display: none;">
+<style>
+	.paddedBubble { padding-left: 20px !important; padding-right: 20px !important; }
+</style>
+
+<div id="divPopupTemplate" style="margin:-10px; padding-right:2px; padding-left:2px; min-width:180px;">
+	<div style="padding-bottom:5px;">
+		<div>
+			<div style="float:right; margin-top: -1px;" data-bind="visible: showDeleteButton()">
+				<img src="./inReach Message from Christchurch ACR 01_files/Popup-Delete.png" alt="user popup delete" style="cursor:pointer" data-bind="click: popupDelete" data-test-id="UserPopupDelete">
+			</div>
+
+			<div style="float:right;" data-bind="visible: (isTrackEditable() || isTrackEditableAdmin()) &amp;&amp; !(editingTrack() || editingTrackColor())">
+                    <img src="./inReach Message from Christchurch ACR 01_files/Popup-Edit.png" class="map-popup-edit-track-btn" data-bind="click: editTrack, attr: { title: strings.EXPLORE_EDIT_TRACK, &#39;alt&#39;: strings.EXPLORE_EDIT_TRACK }" data-test-id="EditTrackPopup">
+		    </div>
+			<div style="float:right;" data-bind="visible: isTrackEditable() &amp;&amp; !editingTrack()">
+				<span class="map-popup-add-to-collections-btn display-none glyphicon glyphicon-book" data-bind="click: addToCollections, attr: { title: strings.EXPLORE_ADD_TO_COLLECTIONS }" data-test-id="AddToCollectionTrackPopup">
+			</span></div>
+
+			<div style="float:right;" data-bind="visible: (isTrackEditable() || isTrackEditableAdmin()) &amp;&amp; (editingTrack() || editingTrackColor()) &amp;&amp; !trackEditPending()">
+                    <img src="./inReach Message from Christchurch ACR 01_files/Popup-DoneEditing.png" class="map-popup-save-edit-track-btn" data-bind="click: saveTrackEdit, attr: { title: strings.EXPLORE_SAVE_TRACK, &#39;alt&#39;: strings.EXPLORE_SAVE_TRACK }" data-test-id="SaveEditTrackPopup">
+				</div>
+			<div style="float:right;" data-bind="visible: (isTrackEditable() || isTrackEditableAdmin()) &amp;&amp; (editingTrack() || editingTrackColor()) &amp;&amp; !trackEditPending()">
+                <img src="./inReach Message from Christchurch ACR 01_files/Popup-CancelEditing.png" data-test-id="CancelEditTrackPopup" class="map-popup-cancel-edit-track-btn" data-bind="click: cancelTrackEdit, attr: { title: strings.MAP_CANCEL_EDIT, &#39;alt&#39;: strings.MAP_CANCEL_EDIT }">
+			</div>
+
+			<div style="float:right;" data-bind="visible: isTrackEditable() &amp;&amp; editingTrack() &amp;&amp; trackEditPending()">
+				<img src="./inReach Message from Christchurch ACR 01_files/ajax-loader-spin.gif" alt="" class="map-popup-cancel-edit-track-btn" data-bind="attr: { title: strings.COMMON_LOADING_ELLIPSIS, &#39;alt&#39;: strings.COMMON_LOADING_ELLIPSIS}">
+			</div>
+
+			<div data-bind="text: displayName, attr: { title: displayName }" class="map-user-popup-displayname"></div>
+		</div>
+		<div style="ex-message_date">
+			<span class="map-message-popup-date" data-bind="text:  messageDate"></span>
+			<span class="map-message-popup-time" data-bind="text: messageTime"></span>
+		</div>
+		
+		<div style="clear: both;"></div>
+		<br>
+
+        <div data-bind="if: messageToList()">
+            <span class="message-recipient-line" data-bind="text: strings.EXPLORE_MESSAGES_TO + &#39; &#39; + messageToList()"></span>
+        </div>
+
+		<div data-bind="if: message()">
+			<span class="map-message-popup-content" data-bind="text: message"></span>
+			<br>
+		</div>
+
+		<div data-bind="if: trackName() &amp;&amp; !editingTrack()">
+			<p class="map-popup-track-details-p text-overflow-ellipsis gray">
+				<b data-bind="text: strings.EXPLORE_TRACK_NAME + &#39;: &#39;"></b>
+				<span data-bind="text: trackName, attr: { title: trackName }"></span>
+			</p>
+		</div>
+
+		<div data-bind="if: trackName() &amp;&amp; editingTrack()">
+			<p class="map-popup-track-details-p">
+				<b data-bind="text: strings.EXPLORE_TRACK_NAME + &#39;: &#39;"></b>
+				<span class="map-track-popup-name-remaining" for="remainingChars" data-bind="text: remainingChars, attr: { title: strings.COMMON_CHARACTERS_REMAINING.format(remainingChars())}"></span>
+				<input class="map-popup-track-name-input form-control form-control-sm" maxlength="100" data-bind="value: observableTrackName, valueUpdate:&#39;keyup&#39;">
+			</p>
+		</div>
+
+
+		<div data-bind="visible: Debug()==true">
+			Id: <span data-bind="text: sourcePoint().Id"></span><br>
+			Trail: <span data-bind="text: sourcePoint().T"></span>
+		</div>
+	</div>
+	<div class="row no-gutters" data-bind="visible: displayMore" style="padding-bottom:10px;">
+		<table class="col">
+			<tbody>
+				<tr style="white-space:nowrap">
+					<td>
+						<span class="map-track-popup-more-label">Speed: <span class="map-track-popup-more-data" data-bind="text: speed"></span>
+					</span></td>
+					<td style="padding-left:12px;">
+						<span class="map-track-popup-more-label">Course: <span class="map-track-popup-more-data" data-bind="html: heading"></span>
+					</span></td>
+				</tr>
+				<tr style="white-space:nowrap">
+					<td>
+						<span class="map-track-popup-more-label">Elevation: <span class="map-track-popup-more-data" data-bind="text: altitude"></span>
+					</span></td>
+					<td style="padding-left:12px;">
+						<span class="map-track-popup-more-label" data-bind="visible: batt()!=&#39;&#39;">Batt: <span class="map-track-popup-more-data" data-bind="text: batt"></span>
+					</span></td>
+				</tr>
+					<tr style="white-space: nowrap" data-bind="visible: oneCoord()==false">
+						<td>
+							<span class="map-track-popup-more-label">Lat: <span class="map-track-popup-more-data" data-bind="text: lat"></span>
+						</span></td>
+						<td style="padding-left: 12px;">
+							<span class="map-track-popup-more-label">Lon: <span class="map-track-popup-more-data" data-bind="text: lon"></span>
+						</span></td>
+					</tr>
+				<tr style="white-space:nowrap">
+					<td colspan="2" data-bind="visible: oneCoord()==true, text: coords()[0]" class="map-track-popup-more-label"></td>
+				</tr>
+			</tbody>
+		</table>
+	</div>
+	<div class="row no-gutters flex-nowrap" style="text-align:center;">
+		<div class="col">
+			<span style="position:relative">
+				<input type="image" alt="Activate tracking on this user&#39;s inReach." title="Activate tracking on this user&#39;s inReach." data-bind="click: showTrackingDlg, attr: { src: trackingButtonImage }, enable: userListBtnEnabled, visible: EnableTracking(), css: { paddedBubble: displayMore() == false }">
+			<span class="popupButtonText" data-bind="visible: displayMore() &amp;&amp; EnableTracking()">Track</span>
+		</span>
+		</div>
+		<div class="col mx-2">
+			<span style="position:relative">
+				<input type="image" alt="Send a message to this user." title="Send a message to this user." data-bind="click: showMessageDlg, attr: { src: messageButtonImage }, enable: userListBtnEnabled, visible:EnableMessage(), css: { paddedBubble: displayMore() == false }">
+			<span class="popupButtonText" data-bind="visible: displayMore() &amp;&amp; EnableMessage()">Message</span>
+		</span>
+		</div>
+		<div class="col">
+			<span style="position:relative">
+				<input type="image" alt="Request the location of this user." title="Request the location of this user." disabled="disabled" data-bind="click: showLocateDlg, attr: { src: locateButtonImage }, enable: userListBtnEnabled, visible:EnableLocate(), css: { paddedBubble: displayMore() == false }">
+			<span class="popupButtonText" data-bind="visible: displayMore() &amp;&amp; EnableLocate()">Locate</span>
+		</span>
+		</div>		
+	</div>
+	
+	<div style="text-align:center; cursor:pointer;" data-bind="html: (displayMore() ? &#39;▼ LESS ▼&#39; : &#39;▲ MORE ▲&#39;), click: function () { displayMore() ? displayMore(false) : displayMore(true) }, style: { color: (displayMore() ? &#39;inherit&#39; : &#39;#0040FF&#39;) }">▲ MORE ▲</div>
+</div>
+
+	</div>
+
+		<script type="text/javascript">
+		    L_PREFER_CANVAS = true;
+
+		    var msgObj = {
+			    name: "Christchurch ACR 01",
+				time: '6/11/2026 2:29:37 AM',
+				text: "UPDATE",
+			};
+
+		if (true) {
+			dragElement(document.getElementById("replyContainer"));
+
+			function dragElement(elmnt) {
+				var pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0;
+				document.getElementById(elmnt.id + "Header").onmousedown = dragMouseDown;
+
+				function dragMouseDown(e) {
+					e = e || window.event;
+					e.preventDefault();
+					pos3 = e.clientX;
+					pos4 = e.clientY;
+					document.onmouseup = closeDragElement;
+					document.onmousemove = elementDrag;
+				}
+
+				function elementDrag(e) {
+					e = e || window.event;
+					e.preventDefault();
+					pos1 = pos3 - e.clientX;
+					pos2 = pos4 - e.clientY;
+					pos3 = e.clientX;
+					pos4 = e.clientY;
+					elmnt.style.top = clamp(61, (elmnt.offsetTop - pos2), window.innerHeight - $(elmnt).height()) + "px";
+					elmnt.style.left = clamp(0, (elmnt.offsetLeft - pos1), window.innerWidth - $(elmnt).width()) + "px";
+				}
+
+				function closeDragElement() {
+					document.onmouseup = null;
+					document.onmousemove = null;
+				}
+
+				function clamp(min, num, max) {
+					return num <= min ? min : num >= max ? max : num;
+				}
+
+				$(window).resize(function () {
+					elmnt.style.left = clamp(0, (elmnt.offsetLeft), window.innerWidth - $(elmnt).width() - 5) + "px";
+				});
+			}
+		}
+
+		$(document).ready(function () {
+			resizeMap();
+			$('.toggleReply').click(function () {
+				var btn = this;
+				$('.replyBody').slideToggle({
+					duration: 200,
+					complete: function () {
+						$(btn).html($('.replyBody').is(':visible') ?
+							'<span class="glyphicon glyphicon-chevron-down"><span class="sr-only">Toggle Message Reply</span></span>'
+							:
+							'<span class="glyphicon glyphicon-chevron-right"><span class="sr-only">Toggle Message Reply</span></span>')
+					},
+					progress: function () {
+						let ele = $('#replyContainer')
+						if (ele.offset().top + ele.height() > window.innerHeight)
+							ele.offset({top: window.innerHeight - ele.height()})
+					}
+				});
+			});
+
+			require(
+				['map-main-leaflet', 'map/controls/MappointView', 'TxtReplyCommon', 'map-config', 'knockout', 'leaflet', 'moment', 'leaflet.delorme.icons'],
+				function (map, popup, replyCommon, config, ko) {
+					map.getInstance().init('map');
+					var temp = new popup();
+					var loc = [config.lat, config.lon];
+
+					var openPopup = function () {
+						var mpv = new popup();
+						var userInfo = {
+							FirstName: ko.observable(config.FirstName),
+							LastName: ko.observable(config.LastName),
+							FullName: ko.observable(config.FirstName + ' ' + config.LastName),
+							CanSendToDevice: ko.observable(config.User.CanSendToDevice),
+							EnableLocate: function () {
+								return false;
+							},
+							EnableMessage: function () {
+								return false;
+							}
+						};
+						mpv.model().sourcePoint(config.data);
+						mpv.model().user(userInfo);
+						mpv.display(new L.LatLng(config.lat, config.lon));
+					};
+
+					var marker = L.DeLorme.Icons.headcrumbMarker(parseInt(config.data.C * 22.5), loc, {
+						'fillColor': '#1D6111',
+						'clickHeadcrumb': openPopup,
+						'source': config.data,
+						'expandable': false,
+						zIndexOffset: 1000
+					});
+
+					if (marker.bindTooltip) {
+						marker.arrowFill.bindTooltip(config.FirstName + ' ' + config.LastName, {
+							permanent: true,
+							className: 'nameLabel',
+							direction: 'bottom'
+						})
+					}
+
+					if (!config.Archived && !config.isEmptyLocation) {
+						marker.addTo(map.getInstance().pointLayer);
+						setTimeout(openPopup, 500);
+
+						map.provideMapCenteringFunctionality(
+							function () {
+								map.setCenter(config.lat, config.lon)
+							},
+							function () {
+								return true;
+							}
+						);
+					}
+					replyCommon.init('bot@example.com', '', 'False');
+				});
+
+		});
+
+		$(window).resize(resizeMap);
+
+		    function resizeMap() {
+			    var $map = $('#map');
+			    var height = $(window).height();
+			    var top = $map.offset()?.top;
+                $map.height(height - top);
+		    }
+		</script>
+	
+<script defer="" src="./inReach Message from Christchurch ACR 01_files/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon="{&quot;version&quot;:&quot;2024.11.0&quot;,&quot;token&quot;:&quot;db7717dc79e943f7a4060f0a6771638b&quot;,&quot;server_timing&quot;:{&quot;name&quot;:{&quot;cfCacheStatus&quot;:true,&quot;cfEdge&quot;:true,&quot;cfExtPri&quot;:true,&quot;cfL4&quot;:true,&quot;cfOrigin&quot;:true,&quot;cfSpeedBrain&quot;:true},&quot;location_startswith&quot;:null}}" crossorigin="anonymous"></script>
+
+
+</body></html>
