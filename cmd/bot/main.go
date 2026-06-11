@@ -77,6 +77,14 @@ type inReachPage struct {
 // browser (Garmin fronts these endpoints with an anti-bot/WAF layer).
 const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// garminHTTPClient builds the http.Client used for all Garmin GET/POST traffic.
+// Overridable in tests to target an httptest server. No cookie jar is required for
+// the reply POST (GARMIN.md §4), but we keep one for the shortlink GET/redirect.
+var garminHTTPClient = func() *http.Client {
+	jar, _ := cookiejar.New(nil)
+	return &http.Client{Jar: jar, Timeout: 15 * time.Second}
+}
+
 // fetchInReachPage GETs the message page behind an inreachlink.com shortlink,
 // following the redirect to the regional explore.garmin.com host. The returned
 // page carries everything the rest of the flow needs: the sender's location
@@ -84,8 +92,7 @@ const browserUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 
 // reply. A shortlink appears to be single-use, so we fetch the page exactly
 // once and reuse it for both purposes.
 func fetchInReachPage(shortlink string) (*inReachPage, error) {
-	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 15 * time.Second}
+	client := garminHTTPClient()
 	req, err := http.NewRequest("GET", shortlink, nil)
 	if err != nil {
 		return nil, err
@@ -141,9 +148,8 @@ func newGarminSessionFromPage(p *inReachPage) (*GarminSession, error) {
 		return nil, fmt.Errorf("reply fields not found on Garmin page (guidSet=%v msgIdSet=%v) at %s",
 			guid != "", messageId != "", p.FinalURL)
 	}
-	jar, _ := cookiejar.New(nil)
 	return &GarminSession{
-		Client:    &http.Client{Jar: jar, Timeout: 15 * time.Second},
+		Client:    garminHTTPClient(),
 		Host:      p.Host,
 		ExtID:     p.ExtID,
 		Guid:      guid,
@@ -174,9 +180,8 @@ func InitGarminSessionFromState(s SessionState) (*GarminSession, error) {
 		return nil, fmt.Errorf("cannot init Garmin session: missing host/guid/messageId in state (hostSet=%v guidSet=%v msgIdSet=%v)",
 			s.Host != "", s.GUID != "", s.MessageId != "")
 	}
-	jar, _ := cookiejar.New(nil)
 	return &GarminSession{
-		Client:    &http.Client{Jar: jar, Timeout: 15 * time.Second},
+		Client:    garminHTTPClient(),
 		Host:      s.Host,
 		ExtID:     s.ExtID,
 		Guid:      s.GUID,
@@ -194,7 +199,9 @@ func InitGarminSessionFromState(s SessionState) (*GarminSession, error) {
 // messages sent directly from the inReach with a GPS fix include it. The
 // sender's location is, however, embedded in the message page behind the
 // inreachlink.com shortlink as JSON:
-//   "Locations":[{ ... "Latitude":<lat>,"Longitude":<lon> ... }]
+//
+//	"Locations":[{ ... "Latitude":<lat>,"Longitude":<lon> ... }]
+//
 // When the email body has no coordinates we follow the shortlink and recover
 // them here. Messages sent with no GPS fix report 0,0 and yield ok=false.
 var reShortlinkLatLon = regexp.MustCompile(`"Latitude":\s*(-?\d+(?:\.\d+)?)\s*,\s*"Longitude":\s*(-?\d+(?:\.\d+)?)`)
@@ -599,6 +606,7 @@ func ensureSchema(db *sql.DB) error {
 		`ALTER TABLE session_state ADD COLUMN last_routine_nz TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE session_state ADD COLUMN message_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE session_state ADD COLUMN reply_host TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_state ADD COLUMN paused_until INTEGER NOT NULL DEFAULT 0`,
 	} {
 		_, err = db.Exec(col)
 		if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
@@ -668,6 +676,22 @@ func loadState(db *sql.DB) (SessionState, error) {
 	}
 	s.Active = activeInt == 1
 	return s, err
+}
+
+// pausedUntil returns the unix epoch (seconds) until which inbound processing is
+// suspended (0 = active). Set via the weather-api /pause endpoint; the bot checks
+// it at the top of every cycle so a fresh real inReach message can be captured for
+// testing without the cron consuming (and burning) its single-use shortlink.
+func pausedUntil(db *sql.DB) (int64, error) {
+	var until int64
+	err := db.QueryRow(
+		`SELECT IFNULL(paused_until, 0) FROM session_state WHERE id='garmin_primary'`,
+	).Scan(&until)
+	if err != nil && strings.Contains(err.Error(), "paused_until") {
+		// Column not present yet on an old DB — treat as not paused.
+		return 0, nil
+	}
+	return until, err
 }
 
 func saveState(db *sql.DB, s SessionState) error {
@@ -883,6 +907,21 @@ func handler(ctx context.Context) error {
 	// Flush captured logs after the run (registered after db.Close so it runs
 	// first, while the connection is still open).
 	defer logCap.flush(db)
+
+	// Suspend switch: when /pause has set a future paused_until, skip the whole
+	// cycle (IMAP poll AND routine broadcasts) so a fresh real inReach message is
+	// left UNSEEN and its single-use shortlink isn't burned. Auto-resumes once the
+	// timestamp lapses.
+	if until, perr := pausedUntil(db); perr != nil {
+		log.Printf("⚠️ Could not read pause flag (continuing): %v", perr)
+	} else if now := time.Now().Unix(); now < until {
+		nzt := "unknown"
+		if loc, lerr := time.LoadLocation("Pacific/Auckland"); lerr == nil {
+			nzt = time.Unix(until, 0).In(loc).Format("2006-01-02 15:04 MST")
+		}
+		log.Printf("⏸️ Processing suspended until %s — skipping poll", nzt)
+		return nil
+	}
 
 	state, err := loadState(db)
 	if err != nil {

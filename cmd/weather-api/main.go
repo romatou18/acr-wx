@@ -34,6 +34,15 @@ func handler(_ context.Context, req events.APIGatewayProxyRequest) (events.APIGa
 		return handleDebug(req)
 	}
 
+	// GET /pause | /resume  — suspend/resume the weather-bot's inbound processing
+	// (lets a fresh real inReach message be captured without the cron burning it).
+	if path == "/weather-api/pause" || path == "/pause" {
+		return handlePause(req)
+	}
+	if path == "/weather-api/resume" || path == "/resume" {
+		return handleResume(req)
+	}
+
 	// GET /weather-api/all  — report for every registered park
 	if strings.HasSuffix(path, "/all") {
 		log.Println("GET /weather-api/all")
@@ -184,6 +193,95 @@ func handleDebug(req events.APIGatewayProxyRequest) (events.APIGatewayProxyRespo
 	return jsonResp(200, string(b)), nil
 }
 
+// handlePause sets session_state.paused_until = now + mins*60 so the weather-bot
+// skips its next cycles, leaving inbound mail UNSEEN. Used to capture a fresh, real
+// inReach message (single-use shortlink) for the live handshake test without the
+// cron consuming it. Auto-resumes when the timestamp lapses. Guarded by LOGS_KEY.
+func handlePause(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if key := os.Getenv("LOGS_KEY"); key != "" && req.QueryStringParameters["key"] != key {
+		return jsonResp(401, `{"error":"unauthorized — set ?key=<LOGS_KEY>"}`), nil
+	}
+
+	mins := 15 // default window
+	if v, err := strconv.Atoi(req.QueryStringParameters["mins"]); err == nil {
+		mins = v
+	}
+	if mins < 1 {
+		mins = 1
+	}
+	if mins > 120 {
+		mins = 120 // safety cap so a typo can't pause the bot for days
+	}
+
+	db, err := connectTurso()
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "db connect: "+err.Error())), nil
+	}
+	defer db.Close()
+	if err := ensurePauseColumn(db); err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, err.Error())), nil
+	}
+
+	until := time.Now().Add(time.Duration(mins) * time.Minute).Unix()
+	if _, err := db.Exec(
+		`UPDATE session_state SET paused_until=? WHERE id='garmin_primary'`, until,
+	); err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "update: "+err.Error())), nil
+	}
+
+	resumesNZT := nzTime(until)
+	log.Printf("⏸️ processing paused for %d min (until %s)", mins, resumesNZT)
+	return jsonResp(200, fmt.Sprintf(`{"paused":true,"mins":%d,"paused_until":%d,"resumes_at_nzt":%q}`,
+		mins, until, resumesNZT)), nil
+}
+
+// handleResume clears the pause flag (paused_until = 0) so the bot processes mail
+// again on its next cycle. Guarded by LOGS_KEY.
+func handleResume(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	if key := os.Getenv("LOGS_KEY"); key != "" && req.QueryStringParameters["key"] != key {
+		return jsonResp(401, `{"error":"unauthorized — set ?key=<LOGS_KEY>"}`), nil
+	}
+
+	db, err := connectTurso()
+	if err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "db connect: "+err.Error())), nil
+	}
+	defer db.Close()
+	if err := ensurePauseColumn(db); err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, err.Error())), nil
+	}
+
+	if _, err := db.Exec(
+		`UPDATE session_state SET paused_until=0 WHERE id='garmin_primary'`,
+	); err != nil {
+		return jsonResp(500, fmt.Sprintf(`{"error":%q}`, "update: "+err.Error())), nil
+	}
+	log.Println("▶️ processing resumed")
+	return jsonResp(200, `{"resumed":true}`), nil
+}
+
+// ensurePauseColumn tolerates a fresh DB (or one created before paused_until
+// existed): create the table/row if missing and add the column idempotently. The
+// bot's ensureSchema normally owns the schema, but the API may be hit first.
+func ensurePauseColumn(db *sql.DB) error {
+	_, _ = db.Exec(`CREATE TABLE IF NOT EXISTS session_state (id TEXT PRIMARY KEY)`)
+	_, err := db.Exec(`ALTER TABLE session_state ADD COLUMN paused_until INTEGER NOT NULL DEFAULT 0`)
+	if err != nil && !strings.Contains(err.Error(), "duplicate column") && !strings.Contains(err.Error(), "already exists") {
+		return fmt.Errorf("ensure paused_until column: %w", err)
+	}
+	_, _ = db.Exec(`INSERT INTO session_state (id) VALUES ('garmin_primary') ON CONFLICT(id) DO NOTHING`)
+	return nil
+}
+
+// nzTime formats a unix epoch in NZ local time for human-readable responses/logs.
+func nzTime(epoch int64) string {
+	loc, err := time.LoadLocation("Pacific/Auckland")
+	if err != nil {
+		return time.Unix(epoch, 0).UTC().Format("2006-01-02 15:04 MST")
+	}
+	return time.Unix(epoch, 0).In(loc).Format("2006-01-02 15:04 MST")
+}
+
 func jsonResp(code int, body string) events.APIGatewayProxyResponse {
 	return events.APIGatewayProxyResponse{
 		StatusCode: code,
@@ -236,6 +334,7 @@ func main() {
 					"lon":   r.URL.Query().Get("lon"),
 					"key":   r.URL.Query().Get("key"),
 					"after": r.URL.Query().Get("after"),
+					"mins":  r.URL.Query().Get("mins"),
 				},
 			})
 			for k, v := range resp.Headers {
@@ -249,6 +348,8 @@ func main() {
 		http.HandleFunc("/weather-api/debug", handle)
 		http.HandleFunc("/log", handle)
 		http.HandleFunc("/debug", handle)
+		http.HandleFunc("/pause", handle)
+		http.HandleFunc("/resume", handle)
 		http.HandleFunc("/weather-api", handle)
 		// Serve the static pages (index.html, debug.html) so the viewer works locally.
 		http.Handle("/", http.FileServer(http.Dir("public")))

@@ -155,7 +155,23 @@ without a real device or satellite credits. `fetchInReachPage` still runs in
 dry-run (a harmless GET), so the page fetch + `Guid`/`MessageId` scrape are still
 validated. Set `GARMIN_DRY_RUN=0` (or unset) for real delivery.
 
-Unit tests (no network): `go test ./cmd/bot/`.
+Unit tests (no network): `go test ./cmd/bot/`. This now also includes
+`TestGarminReplyLoop_*` (`cmd/bot/garmin_reply_loop_test.go`), which drives the whole
+reply loop — shortlink GET → redirect → page parse (Guid/MessageId + sender coords) →
+JSON "Send" POST — against a fake Garmin (`httptest`) server using the golden page
+fixture `cmd/bot/testdata/garmin_message_page.html`. It covers the HTTP mechanics
+(host/extId derivation, POST URL/headers/JSON body, chunking, success/failure detection)
+deterministically, with no device.
+
+**Live handshake (real Garmin, GET only — no send, no credits).** `TestGarminLiveHandshake`
+(integration tag) validates the shortlink→page→Guid scrape against production when given
+a fresh shortlink:
+```
+GARMIN_TEST_SHORTLINK="https://inreachlink.com/<token>" \
+  go test -tags integration ./cmd/bot/ -run GarminLiveHandshake -v
+```
+Because the cron would burn the single-use link first, **suspend processing** while you
+send the device message and grab the link (see §9).
 
 ## 6. Observability — watching it live
 
@@ -187,6 +203,12 @@ curl can't drive the JS, so capture a real browser Send:
 4. Right-click → **Save all as HAR with content**.
 5. The POST's URL, headers, and JSON body are the spec. ⚠️ A HAR holds session
    data — `*.har` is gitignored; never commit/share it publicly.
+6. While you have the page open, **save its HTML** (DevTools → right-click the
+   `<html>` element → Copy → Copy outerHTML, or "Save as") to
+   `cmd/bot/testdata/garmin_message_page.html` as the offline test's golden fixture.
+   **Sanitize before committing**: replace the real `Guid`/`MessageId` values with the
+   test markers (`TEST-guid-0000-0000-000000000001` / `999000111`) and the `Locations[]`
+   coords with `-43.730000 / 170.090000`, so no live session token is committed.
 
 ## 8. State & env
 
@@ -195,4 +217,27 @@ curl can't drive the JS, so capture a real browser Send:
   `last_routine_nz`. Also `request_log` (usage) and `debug_log` (live trace).
 - **Env**: `TURSO_DB_URL`, `TURSO_AUTH_TOKEN`, `EMAIL_USER`, `EMAIL_PASS`
   (Gmail **app password**, requires 2FA). Optional: `LOGS_KEY` (protects
-  `/log` + `/debug`), `GARMIN_DRY_RUN`, `GARMIN_DRY_RUN_REPLY_TO`.
+  `/log` + `/debug` + `/pause` + `/resume`), `GARMIN_DRY_RUN`,
+  `GARMIN_DRY_RUN_REPLY_TO`. Test-only: `GARMIN_TEST_SHORTLINK` (live handshake test).
+
+## 9. Suspending processing (for live testing)
+
+To capture a **fresh, single-use** inReach message without the minute-cron consuming it
+(following — and burning — its shortlink and replying), suspend the bot first:
+
+- **Pause**: `GET /pause?key=<LOGS_KEY>&mins=<N>` (default 15, capped 120). Sets
+  `session_state.paused_until = now + N·60`. The bot checks this at the top of every
+  cycle (`pausedUntil`) and, while active, **returns early before the IMAP poll** — so
+  inbound mail is left UNSEEN and nothing is sent to any device. It **auto-resumes** when
+  the timestamp lapses, so a forgotten pause can't silently drop real traffic.
+- **Resume**: `GET /resume?key=<LOGS_KEY>` clears the flag (`paused_until = 0`).
+
+```
+curl "https://acr-wx.netlify.app/pause?key=<LOGS_KEY>&mins=15"
+# send UPDATE from the inReach; copy a shortlink from the inbox email; run the live test
+curl "https://acr-wx.netlify.app/resume?key=<LOGS_KEY>"
+```
+
+While paused, messages accumulate UNSEEN; on resume the bot processes them (mostly
+failing on now-expired links). To avoid a late reply reaching the real device after a
+test, mark those test emails read in Gmail before resuming.

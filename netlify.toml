@@ -34,3 +34,17 @@
   to   = "/.netlify/functions/weather-api/debug"
   status = 200
   force = true
+
+# Suspend/resume the weather-bot's inbound processing. force = true so these
+# always reach the function (no static file to shadow them, but kept consistent).
+[[redirects]]
+  from = "/pause"
+  to   = "/.netlify/functions/weather-api/pause"
+  status = 200
+  force = true
+
+[[redirects]]
+  from = "/resume"
+  to   = "/.netlify/functions/weather-api/resume"
+  status = 200
+  force = true

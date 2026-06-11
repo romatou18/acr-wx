@@ -1,0 +1,29 @@
+<!--
+  GOLDEN FIXTURE for the offline Garmin reply-loop test (garmin_reply_loop_test.go).
+
+  This is a SANITIZED stand-in for a real explore.garmin.com message page. It mirrors
+  the layout the bot scrapes: the Guid/MessageId hidden inputs and the "Locations":[...]
+  JSON carrying the sender's fix.
+
+  >>> Replace this with a REAL captured page (sanitized) when you have one — see
+      GARMIN.md §7. Keep the test markers below so the test stays valid:
+        - Guid value      = TEST-guid-0000-0000-000000000001
+        - MessageId value = 999000111
+        - Locations fix   = -43.730000, 170.090000  (Aoraki / Mt Cook)
+      A real page is better at catching Garmin layout changes; never commit a live token.
+-->
+<!DOCTYPE html>
+<html>
+<head><title>inReach Message</title></head>
+<body>
+  <form id="replyForm" method="post" action="/TextMessage/TxtMsg">
+    <input data-val="true" data-val-required="The Guid field is required." id="Guid" name="Guid" type="hidden" value="TEST-guid-0000-0000-000000000001">
+    <input data-val="true" data-val-number="The field MessageId must be a number." data-val-required="The MessageId field is required." id="MessageId" name="MessageId" type="hidden" value="999000111">
+    <textarea name="ReplyMessage"></textarea>
+    <button type="submit">Send</button>
+  </form>
+  <script>
+    var mapModel = {"FirstName":"Test","LastName":"Device","Locations":[{"FalseBreak":null,"Latitude":-43.730000,"Longitude":170.090000,"Altitude":3724}]};
+  </script>
+</body>
+</html>

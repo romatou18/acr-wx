@@ -87,6 +87,37 @@ func TestGarminDeviceLoop(t *testing.T) {
 	}
 }
 
+// TestGarminLiveHandshake validates that the shortlink → explore.garmin.com page →
+// Guid/MessageId scrape still works against REAL Garmin (GET only — it does NOT send
+// anything to a device, so it costs no satellite credits). This is the only check
+// that catches Garmin silently changing their page layout or redirect.
+//
+// It needs a FRESH, single-use inreachlink.com shortlink in GARMIN_TEST_SHORTLINK
+// (links expire/are single-use — GARMIN.md §1). To capture one without the cron
+// burning it first, suspend the bot before sending the device message:
+//
+//	curl "https://acr-wx.netlify.app/pause?key=<LOGS_KEY>&mins=15"
+//	# send UPDATE from the inReach, copy a shortlink from the inbox email, then:
+//	GARMIN_TEST_SHORTLINK="https://inreachlink.com/<token>" \
+//	  go test -tags integration ./cmd/bot/ -run GarminLiveHandshake -v
+//	curl "https://acr-wx.netlify.app/resume?key=<LOGS_KEY>"   # or let it auto-expire
+func TestGarminLiveHandshake(t *testing.T) {
+	shortlink := os.Getenv("GARMIN_TEST_SHORTLINK")
+	if shortlink == "" {
+		t.Skip("GARMIN_TEST_SHORTLINK not set — skipping live Garmin handshake test")
+	}
+
+	sess, err := InitGarminSession(shortlink)
+	if err != nil {
+		t.Fatalf("InitGarminSession against real Garmin failed (link expired or layout changed?): %v", err)
+	}
+	if sess.Host == "" || sess.ExtID == "" || sess.Guid == "" || sess.MessageId == "" {
+		t.Fatalf("incomplete session from real page: host=%q extId=%q guidSet=%v msgIdSet=%v",
+			sess.Host, sess.ExtID, sess.Guid != "", sess.MessageId != "")
+	}
+	t.Logf("✅ live handshake OK: host=%s extId=%s guid=%s msgId=%s", sess.Host, sess.ExtID, sess.Guid, sess.MessageId)
+}
+
 // sendGarminEmulatorEmail crafts an email that mimics what a Garmin inReach
 // device sends after a location ping — including the reply URL that carries
 // the extId/guid session tokens and the inline Lat/Lon stamp.
